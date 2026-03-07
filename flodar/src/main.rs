@@ -23,7 +23,7 @@ struct Cli {
     log_format: LogFormat,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum LogFormat {
     Json,
     Pretty,
@@ -55,6 +55,18 @@ struct CollectorConfig {
 struct LoggingConfig {
     #[serde(default = "default_log_level")]
     level: String,
+    /// "loki" to enable Loki backend (requires `--features loki`)
+    #[serde(default)]
+    #[cfg_attr(not(feature = "loki"), allow(dead_code))]
+    backend: Option<String>,
+    /// Loki push URL, e.g. "http://localhost:3100"
+    #[serde(default)]
+    #[cfg_attr(not(feature = "loki"), allow(dead_code))]
+    loki_url: Option<String>,
+    /// Fixed-cardinality labels attached to every Loki log stream
+    #[serde(default)]
+    #[cfg_attr(not(feature = "loki"), allow(dead_code))]
+    loki_labels: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +98,9 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: default_log_level(),
+            backend: None,
+            loki_url: None,
+            loki_labels: None,
         }
     }
 }
@@ -154,6 +169,71 @@ async fn main() -> anyhow::Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_new(&log_level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
+    #[cfg(feature = "loki")]
+    {
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+        // Try to build the Loki layer when backend = "loki".
+        // Returns None (and logs a warning) on any init failure; caller falls back to stdout-only.
+        let loki_init = if config.logging.backend.as_deref() == Some("loki") {
+            let url_str = config
+                .logging
+                .loki_url
+                .as_deref()
+                .unwrap_or("http://localhost:3100");
+
+            url::Url::parse(url_str).ok().and_then(|url| {
+                let mut builder = tracing_loki::builder();
+                if let Some(labels) = &config.logging.loki_labels {
+                    for (k, v) in labels {
+                        builder = builder.label(k, v).ok()?;
+                    }
+                }
+                builder.build_url(url).ok()
+            })
+        } else {
+            None
+        };
+
+        match (loki_init, cli.log_format) {
+            (Some((loki_layer, task)), LogFormat::Json) => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer().json())
+                    .with(loki_layer)
+                    .init();
+                tokio::spawn(task);
+            }
+            (Some((loki_layer, task)), LogFormat::Pretty) => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer().pretty())
+                    .with(loki_layer)
+                    .init();
+                tokio::spawn(task);
+            }
+            (None, LogFormat::Json) => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer().json())
+                    .init();
+                if config.logging.backend.as_deref() == Some("loki") {
+                    tracing::warn!("loki layer init failed, using stdout only");
+                }
+            }
+            (None, LogFormat::Pretty) => {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer().pretty())
+                    .init();
+                if config.logging.backend.as_deref() == Some("loki") {
+                    tracing::warn!("loki layer init failed, using stdout only");
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "loki"))]
     match cli.log_format {
         LogFormat::Json => {
             tracing_subscriber::fmt()
