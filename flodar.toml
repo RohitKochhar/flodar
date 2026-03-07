@@ -8,3 +8,25 @@ format = "json"
 
 [analytics]
 snapshot_interval_secs = 10
+
+[detection]
+enabled = true
+cooldown_secs = 60
+
+[detection.udp_flood]
+min_packets_per_sec = 1000.0
+min_udp_ratio = 0.80
+min_unique_sources = 10
+
+[detection.syn_flood]
+min_packets_per_sec = 500.0
+min_syn_ratio = 0.70
+max_avg_flow_duration_ms = 500
+
+[detection.port_scan]
+min_unique_dst_ports = 50
+max_bytes_per_flow = 100.0
+
+[detection.destination_hotspot]
+min_traffic_ratio = 0.80
+min_bytes_per_sec = 100.0

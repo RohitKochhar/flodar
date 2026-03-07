@@ -1,4 +1,4 @@
-mod metrics;
+pub mod metrics;
 mod window;
 
 use metrics::WindowMetrics;
@@ -8,6 +8,7 @@ use crate::decoder::flow_record::FlowRecord;
 
 pub async fn run(
     mut rx: tokio::sync::broadcast::Receiver<FlowRecord>,
+    metrics_tx: tokio::sync::broadcast::Sender<WindowMetrics>,
     snapshot_interval_secs: u64,
 ) {
     let mut windows = vec![
@@ -44,6 +45,7 @@ pub async fn run(
                     window.evict_expired();
                     let metrics = window.compute();
                     log_metrics(&metrics);
+                    let _ = metrics_tx.send(metrics);
                 }
             }
         }

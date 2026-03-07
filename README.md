@@ -1,6 +1,6 @@
 # Flodar
 
-Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, emits one structured JSON log line per flow record, and continuously computes sliding-window traffic analytics.
+Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, emits one structured JSON log line per flow record, continuously computes sliding-window traffic analytics, and fires explainable alerts when traffic patterns match known attack signatures.
 
 ## Requirements
 
@@ -52,6 +52,28 @@ format = "json"             # Log format: json | pretty
 
 [analytics]
 snapshot_interval_secs = 10  # How often to emit window_metrics log lines (seconds).
+
+[detection]
+enabled = true
+cooldown_secs = 60           # Suppress repeat alerts for the same rule+target for this many seconds.
+
+[detection.udp_flood]
+min_packets_per_sec = 1000.0
+min_udp_ratio = 0.80
+min_unique_sources = 10
+
+[detection.syn_flood]
+min_packets_per_sec = 500.0
+min_syn_ratio = 0.70
+max_avg_flow_duration_ms = 500
+
+[detection.port_scan]
+min_unique_dst_ports = 50
+max_bytes_per_flow = 100.0
+
+[detection.destination_hotspot]
+min_traffic_ratio = 0.80
+min_bytes_per_sec = 100.0
 ```
 
 Run with a config file:
@@ -164,107 +186,135 @@ Each snapshot includes:
 | `top_dst_ips` | Top 5 destination IPs by bytes (`ip=bytes,...`) |
 | `protocol_dist` | Flow count per IANA protocol number (`proto=count,...`) |
 
-Example JSON output:
+## Detection
+
+The detection engine evaluates each window snapshot against four threshold-based rules and logs a `WARN`-level `ALERT` line when one fires. All thresholds are configurable; no magic numbers exist in the rule logic.
+
+### Alert format
 
 ```json
 {
-  "timestamp": "2026-03-07T00:00:10.000Z",
-  "level": "INFO",
+  "timestamp": "2026-03-07T00:00:12.000Z",
+  "level": "WARN",
   "fields": {
-    "window_secs": 60,
-    "flows": 120,
-    "packets": 1440,
-    "bytes": 5990400,
-    "flows_per_sec": 2.0,
-    "packets_per_sec": 24.0,
-    "bytes_per_sec": 99840.0,
-    "unique_src_ips": 5,
-    "unique_dst_ips": 1,
-    "top_src_ips": "10.0.0.5=1198080,10.0.0.6=1198080,10.0.0.7=1198080,10.0.0.8=1198080,10.0.0.9=1198080",
-    "top_dst_ips": "1.1.1.1=5990400",
-    "protocol_dist": "6=120",
-    "message": "window_metrics"
+    "rule": "udp_flood",
+    "severity": "High",
+    "target_ip": null,
+    "window_secs": 10,
+    "indicators": "packets/sec: 3400 (threshold: 1000) | UDP ratio: 92% of flows (threshold: 80%) | unique source IPs: 3400 (threshold: 10)",
+    "message": "ALERT"
   }
 }
 ```
 
-If the analytics receiver falls behind the collector, dropped record counts are logged as warnings:
+Each `indicators` entry is a plain-English sentence with the observed value and the threshold that was crossed. Every alert contains at least two indicators.
 
-```json
-{"level":"WARN","fields":{"dropped":42,"message":"analytics receiver lagged, records dropped"}}
-```
+### Rules
+
+#### UDP Flood (`udp_flood`) — evaluated on 10 s window
+
+Fires when ALL of:
+- `packets_per_sec` ≥ `min_packets_per_sec` (default: 1000)
+- UDP flows / total flows ≥ `min_udp_ratio` (default: 80%)
+- `unique_src_ips` ≥ `min_unique_sources` (default: 10)
+
+#### SYN Flood (`syn_flood`) — evaluated on 10 s window
+
+Fires when ALL of:
+- `packets_per_sec` ≥ `min_packets_per_sec` (default: 500)
+- TCP flows with SYN set and ACK not set / total TCP flows ≥ `min_syn_ratio` (default: 70%)
+- Average flow duration ≤ `max_avg_flow_duration_ms` (default: 500 ms)
+
+#### Port Scan (`port_scan`) — evaluated on 60 s window
+
+Fires when, for any single source IP:
+- Distinct destination ports contacted ≥ `min_unique_dst_ports` (default: 50)
+- Average bytes per flow ≤ `max_bytes_per_flow` (default: 100)
+
+#### Destination Hotspot (`destination_hotspot`) — evaluated on 10 s window
+
+Fires when:
+- `bytes_per_sec` ≥ `min_bytes_per_sec` (default: 100)
+- Top destination IP accounts for ≥ `min_traffic_ratio` (default: 80%) of total bytes in window
+
+### Alert cooldown
+
+Repeat alerts for the same `(rule, target_ip)` pair are suppressed for `cooldown_secs` (default: 60 s) to prevent log flooding during sustained attacks.
 
 ## Testing Without a Router
 
-Send a hand-crafted NetFlow v5 packet using Python:
-
-```python
-import socket, struct
-
-# NetFlow v5 header (24 bytes)
-header = struct.pack(
-    "!HHIIIIBBH",
-    5,          # version
-    1,          # count (1 record)
-    100000,     # sysuptime (ms)
-    0,          # unix seconds
-    0,          # unix nanoseconds
-    1,          # flow sequence
-    0,          # engine type
-    0,          # engine id
-    0,          # sampling interval
-)
-
-# Flow record (48 bytes)
-record = struct.pack(
-    "!4s4s4sHHIIIIHHBBBBHBBH",
-    bytes([10, 0, 0, 1]),    # src ip
-    bytes([10, 0, 0, 2]),    # dst ip
-    bytes([0, 0, 0, 0]),     # next hop
-    0, 0,                    # input/output SNMP
-    10,                      # packets
-    1400,                    # bytes
-    1000,                    # start_time
-    2000,                    # end_time
-    54321,                   # src port
-    80,                      # dst port
-    0,                       # padding
-    0x18,                    # tcp flags (PSH+ACK)
-    6,                       # protocol (TCP)
-    0,                       # ToS
-    0, 0, 0, 0, 0,           # AS + masks + padding
-)
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(header + record, ("127.0.0.1", 2055))
-print("Sent 1 NetFlow v5 record")
-```
-
-Run Flodar in one terminal, send the packet from another, and confirm the JSON log line appears.
-
 ### Using flowgen
 
-The `flowgen` binary generates synthetic NetFlow v5 traffic against a running Flodar instance:
+The `flowgen` binary generates synthetic NetFlow v5 traffic against a running Flodar instance.
+
+**Normal traffic (no alerts expected):**
 
 ```bash
-cargo run -p flowgen -- --help
+cargo run -p flowgen -- --flows 5 --repeat 5 --interval-ms 2000
 ```
+
+**Attack simulation modes:**
+
+```bash
+# UDP flood — triggers udp_flood alert within ~20 s
+cargo run -p flowgen -- --mode udp-flood --pps 2000 --duration-secs 30
+
+# SYN flood — triggers syn_flood alert within ~20 s
+cargo run -p flowgen -- --mode syn-flood --pps 1000 --duration-secs 30
+
+# Port scan — triggers port_scan alert within ~65 s (60 s window)
+cargo run -p flowgen -- --mode port-scan --src-ip 10.0.0.99 --ports 200 --duration-secs 60
+
+# Destination hotspot — triggers destination_hotspot alert within ~20 s
+cargo run -p flowgen -- --mode hotspot --dst-ip 1.1.1.1 --ratio 0.95 --duration-secs 30
+```
+
+**flowgen CLI reference:**
 
 ```
 Usage: flowgen [OPTIONS]
 
 Options:
-      --target <TARGET>          Destination host:port [default: 127.0.0.1:2055]
-      --flows <FLOWS>            Number of flow records per batch [default: 5]
-      --repeat <REPEAT>          Number of times to send the packet batch [default: 1]
-      --interval-ms <INTERVAL_MS>  Milliseconds to wait between sends [default: 1000]
-  -h, --help                     Print help
+      --target <TARGET>              Destination host:port [default: 127.0.0.1:2055]
+      --mode <MODE>                  normal | udp-flood | syn-flood | port-scan | hotspot [default: normal]
+
+Normal mode:
+      --flows <FLOWS>                Flow records per batch [default: 5]
+      --repeat <REPEAT>              Number of batches to send [default: 1]
+      --interval-ms <INTERVAL_MS>    Milliseconds between batches [default: 1000]
+
+Attack modes:
+      --pps <PPS>                    Target packets-per-second (udp-flood, syn-flood) [default: 1000]
+      --duration-secs <DURATION>     Duration of attack simulation [default: 30]
+      --src-ip <SRC_IP>              Fixed source IP (port-scan) [default: 10.0.0.99]
+      --ports <PORTS>                Unique destination ports to scan (port-scan) [default: 200]
+      --dst-ip <DST_IP>              Hotspot destination IP [default: 1.1.1.1]
+      --ratio <RATIO>                Fraction of traffic to hotspot IP (0.0–1.0) [default: 0.95]
 ```
 
-Send 100 flows in 10 batches of 10, one batch per second:
+### Using Python
 
-```bash
-cargo run -p flowgen -- --flows 10 --repeat 10 --interval-ms 1000
+Send a hand-crafted NetFlow v5 packet:
+
+```python
+import socket, struct
+
+header = struct.pack(
+    "!HHIIIIBBH",
+    5, 1, 100000, 0, 0, 1, 0, 0, 0,
+)
+
+record = struct.pack(
+    "!4s4s4sHHIIIIHHBBBBHBBH",
+    bytes([10, 0, 0, 1]),
+    bytes([10, 0, 0, 2]),
+    bytes([0, 0, 0, 0]),
+    0, 0, 10, 1400, 1000, 2000, 54321, 80,
+    0, 0x18, 6, 0, 0, 0, 0, 0, 0,
+)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(header + record, ("127.0.0.1", 2055))
 ```
 
 ## Error Handling
@@ -291,17 +341,25 @@ flodar/
  ├─ flodar.toml                   default configuration
  ├─ flodar/
  │  └─ src/
- │     ├─ main.rs                 CLI, config loading, tracing init
+ │     ├─ main.rs                 CLI, config loading, tracing init, task wiring
  │     ├─ collector/mod.rs        async UDP listener; broadcasts FlowRecords
  │     ├─ analytics/
- │     │  ├─ mod.rs               drives sliding windows, logs metrics on interval
+ │     │  ├─ mod.rs               drives sliding windows, logs + broadcasts metrics
  │     │  ├─ metrics.rs           WindowMetrics struct and compute()
  │     │  └─ window.rs            SlidingWindow with push/evict/compute + tests
- │     └─ decoder/
- │        ├─ flow_record.rs       FlowRecord struct
- │        └─ netflow_v5.rs        NetFlow v5 binary parser + tests
+ │     ├─ decoder/
+ │     │  ├─ flow_record.rs       FlowRecord struct
+ │     │  └─ netflow_v5.rs        NetFlow v5 binary parser + tests
+ │     └─ detection/
+ │        ├─ mod.rs               DetectionConfig, run() loop, alert cooldown
+ │        ├─ alert.rs             Alert struct, Severity enum, log_alert()
+ │        └─ rules/
+ │           ├─ udp_flood.rs      UDP flood rule + tests
+ │           ├─ syn_flood.rs      SYN flood rule + tests
+ │           ├─ port_scan.rs      port scan rule + tests
+ │           └─ destination_hotspot.rs  destination hotspot rule + tests
  └─ flowgen/                      synthetic NetFlow v5 traffic generator
-    └─ src/main.rs                CLI: --target, --flows, --repeat, --interval-ms
+    └─ src/main.rs                normal + 4 attack simulation modes
 ```
 
 ## Running Tests
@@ -310,13 +368,33 @@ flodar/
 cargo test
 ```
 
-The parser has unit tests covering: single record, multiple records, wrong version, truncated packet, and header/length mismatch.
+33 unit tests across five modules:
 
-The analytics module has unit tests covering: push and compute, expired record eviction, fresh record retention, and protocol distribution.
+| Module | Tests |
+|---|---|
+| `decoder::netflow_v5` | single record, multiple records, wrong version, truncated packet, length mismatch |
+| `analytics::window` | push/compute, evict expired, keep fresh, protocol distribution |
+| `detection::rules::udp_flood` | fires, no-fire on pps/ratio/sources, exact thresholds, indicator count |
+| `detection::rules::syn_flood` | fires, no-fire on pps/ratio/duration/no-tcp, indicator count |
+| `detection::rules::port_scan` | fires, no-fire on port count/bytes/window, correct target IP, indicator count |
+| `detection::rules::destination_hotspot` | fires, no-fire on ratio/rate/no-bytes, correct target IP, indicator count |
 
-## What Flodar Does Not Do (v0.2)
+## Pipeline
+
+```
+                          broadcast (FlowRecord)
+FlowRecord ──────────────────────────────────────► analytics engine
+                                                         │
+                                               broadcast (WindowMetrics)
+                                                    ┌────┴────┐
+                                               log_metrics   detection engine
+                                                              │
+                                                         log_alert (WARN)
+```
+
+## What Flodar Does Not Do (v0.3)
 
 - No NetFlow v9, IPFIX, or sFlow support
 - No storage — logs only
-- No HTTP API or Prometheus metrics
-- No anomaly detection
+- No HTTP API or Prometheus metrics endpoint (v0.4)
+- No ML-based or statistical anomaly detection — all rules are threshold-based
