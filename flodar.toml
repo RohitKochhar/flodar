@@ -1,0 +1,7 @@
+[collector]
+bind_address = "0.0.0.0"
+bind_port = 2055
+
+[logging]
+level = "info"
+format = "json"
