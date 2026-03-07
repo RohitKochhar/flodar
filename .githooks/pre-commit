@@ -54,18 +54,9 @@ run_check "Tests (cargo test)" \
 run_check "Release build (cargo build --release)" \
     cargo build --release --all
 
-# 5. Security audit (skipped gracefully if cargo-audit is not installed)
-info "Security audit (cargo audit)"
-if command -v cargo-audit &>/dev/null || cargo audit --version &>/dev/null 2>&1; then
-    if cargo audit; then
-        pass "Security audit passed"
-    else
-        fail "Security audit failed"
-        FAILED+=("Security audit")
-    fi
-else
-    warn "cargo-audit not installed — skipping (run 'cargo install cargo-audit' to enable)"
-fi
+# 5. Security audit (cargo-audit required)
+run_check "Security audit (cargo audit)" \
+    cargo audit
 echo
 
 # Summary

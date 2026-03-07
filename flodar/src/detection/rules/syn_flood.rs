@@ -51,6 +51,12 @@ pub fn evaluate(metrics: &WindowMetrics, config: &SynFloodConfig) -> Option<Aler
     let duration_ok = metrics.avg_flow_duration_ms <= config.max_avg_flow_duration_ms;
 
     if pps_ok && ratio_ok && duration_ok {
+        let top_dsts = metrics
+            .top_dst_ips
+            .iter()
+            .map(|(ip, bytes)| format!("{ip}({bytes}B)"))
+            .collect::<Vec<_>>()
+            .join(", ");
         Some(Alert {
             rule: "syn_flood".to_string(),
             severity: Severity::High,
@@ -70,6 +76,8 @@ pub fn evaluate(metrics: &WindowMetrics, config: &SynFloodConfig) -> Option<Aler
                     "average flow duration: {}ms (threshold: {}ms)",
                     metrics.avg_flow_duration_ms, config.max_avg_flow_duration_ms
                 ),
+                format!("unique destination IPs: {}", metrics.unique_dst_ips),
+                format!("top destination IPs: {}", top_dsts),
             ],
             triggered_at: std::time::SystemTime::now(),
         })
