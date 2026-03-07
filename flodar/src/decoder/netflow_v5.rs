@@ -95,6 +95,7 @@ mod tests {
         h
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_record(
         src: [u8; 4],
         dst: [u8; 4],
@@ -179,6 +180,9 @@ mod tests {
         let mut pkt = make_header(5, 2);
         pkt.extend(make_record([0; 4], [0; 4], 0, 0, 0, 0, 0, 0));
         let err = parse(&pkt, exporter).unwrap_err();
-        assert!(matches!(err, DecodeError::LengthMismatch { header: 2, fits: 1 }));
+        assert!(matches!(
+            err,
+            DecodeError::LengthMismatch { header: 2, fits: 1 }
+        ));
     }
 }

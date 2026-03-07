@@ -75,7 +75,6 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();

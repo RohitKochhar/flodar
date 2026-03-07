@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+pass() { echo -e "  ${GREEN}✓${RESET} $1"; }
+fail() { echo -e "  ${RED}✗${RESET} $1"; }
+info() { echo -e "${BOLD}==> $1${RESET}"; }
+warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
+
+FAILED=()
+
+run_check() {
+    local name="$1"
+    shift
+    info "$name"
+    if "$@"; then
+        pass "$name passed"
+    else
+        fail "$name failed"
+        FAILED+=("$name")
+    fi
+    echo
+}
+
+echo
+echo -e "${BOLD}Flodar pre-commit checks${RESET}"
+echo "────────────────────────────────────────"
+echo
+
+# 1. Format
+run_check "Format (cargo fmt)" \
+    cargo fmt --all -- --check
+
+# 2. Clippy
+run_check "Lint (cargo clippy)" \
+    cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Tests
+run_check "Tests (cargo test)" \
+    cargo test --all
+
+# 4. Release build
+run_check "Release build (cargo build --release)" \
+    cargo build --release --all
+
+# 5. Security audit (skipped gracefully if cargo-audit is not installed)
+info "Security audit (cargo audit)"
+if command -v cargo-audit &>/dev/null || cargo audit --version &>/dev/null 2>&1; then
+    if cargo audit; then
+        pass "Security audit passed"
+    else
+        fail "Security audit failed"
+        FAILED+=("Security audit")
+    fi
+else
+    warn "cargo-audit not installed — skipping (run 'cargo install cargo-audit' to enable)"
+fi
+echo
+
+# Summary
+echo "────────────────────────────────────────"
+if [ ${#FAILED[@]} -eq 0 ]; then
+    echo -e "${GREEN}${BOLD}All checks passed.${RESET}"
+    echo
+    exit 0
+else
+    echo -e "${RED}${BOLD}${#FAILED[@]} check(s) failed:${RESET}"
+    for check in "${FAILED[@]}"; do
+        echo -e "  ${RED}•${RESET} $check"
+    done
+    echo
+    echo -e "Commit blocked. Fix the issues above and try again."
+    echo -e "To skip hooks in an emergency: ${YELLOW}git commit --no-verify${RESET}"
+    echo
+    exit 1
+fi
