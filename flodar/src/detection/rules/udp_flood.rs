@@ -5,6 +5,8 @@ use crate::detection::alert::{Alert, Severity};
 
 #[derive(Debug, Deserialize)]
 pub struct UdpFloodConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_min_packets_per_sec")]
     pub min_packets_per_sec: f64,
     #[serde(default = "default_min_udp_ratio")]
@@ -13,6 +15,9 @@ pub struct UdpFloodConfig {
     pub min_unique_sources: usize,
 }
 
+fn default_enabled() -> bool {
+    true
+}
 fn default_min_packets_per_sec() -> f64 {
     1000.0
 }
@@ -26,6 +31,7 @@ fn default_min_unique_sources() -> usize {
 impl Default for UdpFloodConfig {
     fn default() -> Self {
         Self {
+            enabled: default_enabled(),
             min_packets_per_sec: default_min_packets_per_sec(),
             min_udp_ratio: default_min_udp_ratio(),
             min_unique_sources: default_min_unique_sources(),

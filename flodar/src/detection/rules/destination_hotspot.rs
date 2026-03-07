@@ -5,12 +5,17 @@ use crate::detection::alert::{Alert, Severity};
 
 #[derive(Debug, Deserialize)]
 pub struct DestinationHotspotConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_min_traffic_ratio")]
     pub min_traffic_ratio: f64,
     #[serde(default = "default_min_bytes_per_sec")]
     pub min_bytes_per_sec: f64,
 }
 
+fn default_enabled() -> bool {
+    true
+}
 fn default_min_traffic_ratio() -> f64 {
     0.80
 }
@@ -21,6 +26,7 @@ fn default_min_bytes_per_sec() -> f64 {
 impl Default for DestinationHotspotConfig {
     fn default() -> Self {
         Self {
+            enabled: default_enabled(),
             min_traffic_ratio: default_min_traffic_ratio(),
             min_bytes_per_sec: default_min_bytes_per_sec(),
         }

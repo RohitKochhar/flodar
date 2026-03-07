@@ -5,6 +5,8 @@ use crate::detection::alert::{Alert, Severity};
 
 #[derive(Debug, Deserialize)]
 pub struct PortScanConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_min_unique_dst_ports")]
     pub min_unique_dst_ports: usize,
     #[serde(default = "default_max_bytes_per_flow")]
@@ -13,6 +15,9 @@ pub struct PortScanConfig {
     pub window_secs: u64,
 }
 
+fn default_enabled() -> bool {
+    true
+}
 fn default_min_unique_dst_ports() -> usize {
     50
 }
@@ -26,6 +31,7 @@ fn default_window_secs() -> u64 {
 impl Default for PortScanConfig {
     fn default() -> Self {
         Self {
+            enabled: default_enabled(),
             min_unique_dst_ports: default_min_unique_dst_ports(),
             max_bytes_per_flow: default_max_bytes_per_flow(),
             window_secs: default_window_secs(),

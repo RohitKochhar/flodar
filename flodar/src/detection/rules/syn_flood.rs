@@ -5,6 +5,8 @@ use crate::detection::alert::{Alert, Severity};
 
 #[derive(Debug, Deserialize)]
 pub struct SynFloodConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_min_packets_per_sec")]
     pub min_packets_per_sec: f64,
     #[serde(default = "default_min_syn_ratio")]
@@ -13,6 +15,9 @@ pub struct SynFloodConfig {
     pub max_avg_flow_duration_ms: u32,
 }
 
+fn default_enabled() -> bool {
+    true
+}
 fn default_min_packets_per_sec() -> f64 {
     500.0
 }
@@ -26,6 +31,7 @@ fn default_max_avg_flow_duration_ms() -> u32 {
 impl Default for SynFloodConfig {
     fn default() -> Self {
         Self {
+            enabled: default_enabled(),
             min_packets_per_sec: default_min_packets_per_sec(),
             min_syn_ratio: default_min_syn_ratio(),
             max_avg_flow_duration_ms: default_max_avg_flow_duration_ms(),

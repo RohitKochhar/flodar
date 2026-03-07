@@ -67,21 +67,29 @@ pub async fn run(mut rx: tokio::sync::broadcast::Receiver<WindowMetrics>, config
 
                 match metrics.window_secs {
                     10 => {
-                        if let Some(a) = udp_flood::evaluate(&metrics, &config.udp_flood) {
-                            candidates.push(a);
+                        if config.udp_flood.enabled {
+                            if let Some(a) = udp_flood::evaluate(&metrics, &config.udp_flood) {
+                                candidates.push(a);
+                            }
                         }
-                        if let Some(a) = syn_flood::evaluate(&metrics, &config.syn_flood) {
-                            candidates.push(a);
+                        if config.syn_flood.enabled {
+                            if let Some(a) = syn_flood::evaluate(&metrics, &config.syn_flood) {
+                                candidates.push(a);
+                            }
                         }
-                        if let Some(a) =
-                            destination_hotspot::evaluate(&metrics, &config.destination_hotspot)
-                        {
-                            candidates.push(a);
+                        if config.destination_hotspot.enabled {
+                            if let Some(a) =
+                                destination_hotspot::evaluate(&metrics, &config.destination_hotspot)
+                            {
+                                candidates.push(a);
+                            }
                         }
                     }
                     60 => {
-                        if let Some(a) = port_scan::evaluate(&metrics, &config.port_scan) {
-                            candidates.push(a);
+                        if config.port_scan.enabled {
+                            if let Some(a) = port_scan::evaluate(&metrics, &config.port_scan) {
+                                candidates.push(a);
+                            }
                         }
                     }
                     _ => {}
