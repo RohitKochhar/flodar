@@ -3,6 +3,7 @@ pub mod rules;
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use alert::log_alert;
@@ -14,6 +15,7 @@ pub use rules::syn_flood::SynFloodConfig;
 pub use rules::udp_flood::UdpFloodConfig;
 
 use crate::analytics::metrics::WindowMetrics;
+use crate::api::{FlodarMetrics, SharedState};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct DetectionConfig {
@@ -51,7 +53,12 @@ impl Default for DetectionConfig {
     }
 }
 
-pub async fn run(mut rx: tokio::sync::broadcast::Receiver<WindowMetrics>, config: DetectionConfig) {
+pub async fn run(
+    mut rx: tokio::sync::broadcast::Receiver<WindowMetrics>,
+    config: DetectionConfig,
+    shared_state: SharedState,
+    prom_metrics: Arc<FlodarMetrics>,
+) {
     if !config.enabled {
         tracing::info!("detection engine disabled");
         return;
@@ -105,6 +112,18 @@ pub async fn run(mut rx: tokio::sync::broadcast::Receiver<WindowMetrics>, config
 
                     if !suppressed {
                         log_alert(&alert);
+                        prom_metrics
+                            .alerts_total
+                            .with_label_values(&[&alert.rule])
+                            .inc();
+
+                        let mut state = shared_state.write().await;
+                        if state.recent_alerts.len() >= 100 {
+                            state.recent_alerts.pop_front();
+                        }
+                        state.recent_alerts.push_back(alert.clone());
+                        drop(state);
+
                         cooldowns.insert(key, now);
                     }
                 }

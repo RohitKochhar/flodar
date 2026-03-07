@@ -1,8 +1,14 @@
+use std::sync::Arc;
+use std::time::Instant;
+
+use crate::api::{FlodarMetrics, SharedState};
 use crate::decoder::flow_record::FlowRecord;
 
 pub async fn run(
     bind_addr: std::net::SocketAddr,
     tx: tokio::sync::broadcast::Sender<FlowRecord>,
+    shared_state: SharedState,
+    prom_metrics: Arc<FlodarMetrics>,
 ) -> anyhow::Result<()> {
     let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
     tracing::info!(address = %bind_addr, "collector listening");
@@ -13,6 +19,21 @@ pub async fn run(
             Ok(records) => {
                 for r in records {
                     log_flow(&r);
+
+                    prom_metrics.flows_total.inc();
+                    prom_metrics.packets_total.inc_by(r.packets as f64);
+                    prom_metrics.bytes_total.inc_by(r.bytes as f64);
+
+                    {
+                        let mut state = shared_state.write().await;
+                        state.total_flows += 1;
+                        state.total_packets += r.packets as u64;
+                        state.total_bytes += r.bytes as u64;
+                        state
+                            .exporter_last_seen
+                            .insert(r.exporter_ip, Instant::now());
+                    }
+
                     let _ = tx.send(r);
                 }
             }
