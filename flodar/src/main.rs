@@ -1,6 +1,7 @@
 mod analytics;
 mod collector;
 mod decoder;
+mod detection;
 
 use anyhow::Context;
 use clap::Parser;
@@ -8,7 +9,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.2.0")]
+#[command(name = "flodar", version = "0.3.0")]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -33,6 +34,8 @@ struct Config {
     logging: LoggingConfig,
     #[serde(default)]
     analytics: AnalyticsConfig,
+    #[serde(default)]
+    detection: detection::DetectionConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,12 +139,22 @@ async fn main() -> anyhow::Result<()> {
     .parse()
     .context("invalid bind address")?;
 
-    let (tx, rx) = tokio::sync::broadcast::channel::<decoder::flow_record::FlowRecord>(1024);
+    let (flow_tx, flow_rx) =
+        tokio::sync::broadcast::channel::<decoder::flow_record::FlowRecord>(1024);
+    let (metrics_tx, metrics_rx) =
+        tokio::sync::broadcast::channel::<analytics::metrics::WindowMetrics>(256);
 
-    tokio::try_join!(collector::run(bind_addr, tx), async {
-        analytics::run(rx, config.analytics.snapshot_interval_secs).await;
-        Ok(())
-    },)?;
+    tokio::try_join!(
+        collector::run(bind_addr, flow_tx),
+        async {
+            analytics::run(flow_rx, metrics_tx, config.analytics.snapshot_interval_secs).await;
+            Ok(())
+        },
+        async {
+            detection::run(metrics_rx, config.detection).await;
+            Ok(())
+        },
+    )?;
 
     Ok(())
 }
