@@ -31,6 +31,6 @@ min_unique_dst_ports = 50
 max_bytes_per_flow = 100.0
 
 [detection.destination_hotspot]
-enabled = true
+enabled = false
 min_traffic_ratio = 0.80
 min_bytes_per_sec = 100.0
