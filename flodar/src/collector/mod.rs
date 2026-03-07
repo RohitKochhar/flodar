@@ -1,6 +1,9 @@
 use crate::decoder::flow_record::FlowRecord;
 
-pub async fn run(bind_addr: std::net::SocketAddr) -> anyhow::Result<()> {
+pub async fn run(
+    bind_addr: std::net::SocketAddr,
+    tx: tokio::sync::broadcast::Sender<FlowRecord>,
+) -> anyhow::Result<()> {
     let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
     tracing::info!(address = %bind_addr, "collector listening");
     let mut buf = vec![0u8; 4096];
@@ -10,6 +13,7 @@ pub async fn run(bind_addr: std::net::SocketAddr) -> anyhow::Result<()> {
             Ok(records) => {
                 for r in records {
                     log_flow(&r);
+                    let _ = tx.send(r);
                 }
             }
             Err(e) => {

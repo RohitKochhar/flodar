@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::net::UdpSocket;
+use std::time::Duration;
 
 #[derive(Parser)]
 struct Args {
@@ -8,6 +9,14 @@ struct Args {
 
     #[arg(long, default_value_t = 5)]
     flows: u16,
+
+    /// Number of times to send the packet batch (default: 1)
+    #[arg(long, default_value_t = 1)]
+    repeat: u32,
+
+    /// Milliseconds to wait between sends (default: 1000)
+    #[arg(long, default_value_t = 1000)]
+    interval_ms: u64,
 }
 
 fn main() {
@@ -15,18 +24,36 @@ fn main() {
     let socket = UdpSocket::bind("0.0.0.0:0").expect("bind failed");
 
     const MAX_PER_PACKET: u16 = 30;
-    let mut remaining = args.flows;
-    let mut sequence: u32 = 1;
+    let mut total_sent = 0u64;
 
-    while remaining > 0 {
-        let count = remaining.min(MAX_PER_PACKET);
-        let packet = build_netflow_v5_packet(count, sequence, args.flows - remaining);
-        socket.send_to(&packet, &args.target).expect("send failed");
-        remaining -= count;
-        sequence += 1;
+    for iteration in 0..args.repeat {
+        let mut remaining = args.flows;
+        let mut sequence: u32 = iteration * (args.flows as u32 / MAX_PER_PACKET as u32 + 1) + 1;
+
+        while remaining > 0 {
+            let count = remaining.min(MAX_PER_PACKET);
+            let offset = args.flows - remaining;
+            let packet = build_netflow_v5_packet(count, sequence, offset);
+            socket.send_to(&packet, &args.target).expect("send failed");
+            remaining -= count;
+            sequence += 1;
+        }
+
+        total_sent += args.flows as u64;
+        println!(
+            "flowgen: [{}/{}] sent {} flow(s) to {}",
+            iteration + 1,
+            args.repeat,
+            args.flows,
+            args.target
+        );
+
+        if iteration + 1 < args.repeat {
+            std::thread::sleep(Duration::from_millis(args.interval_ms));
+        }
     }
 
-    println!("flowgen: sent {} flow(s) to {}", args.flows, args.target);
+    println!("flowgen: done — {} total flow(s) sent", total_sent);
 }
 
 fn build_netflow_v5_packet(count: u16, sequence: u32, offset: u16) -> Vec<u8> {
