@@ -1,6 +1,6 @@
 # Flodar
 
-Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, and emits one structured JSON log line per flow record.
+Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, emits one structured JSON log line per flow record, and continuously computes sliding-window traffic analytics.
 
 ## Requirements
 
@@ -49,6 +49,9 @@ bind_port = 2055            # Standard NetFlow port. Change if your exporter use
 [logging]
 level = "info"              # Log level: error | warn | info | debug | trace
 format = "json"             # Log format: json | pretty
+
+[analytics]
+snapshot_interval_secs = 10  # How often to emit window_metrics log lines (seconds).
 ```
 
 Run with a config file:
@@ -137,6 +140,60 @@ Useful for development and manual inspection:
     ...
 ```
 
+## Analytics
+
+Flodar continuously aggregates flow records into three sliding windows and emits a `window_metrics` log event on every snapshot interval (default: every 10 s):
+
+| Window | Covers |
+|---|---|
+| 10 s | Last 10 seconds |
+| 60 s | Last 1 minute |
+| 300 s | Last 5 minutes |
+
+Each snapshot includes:
+
+| Field | Description |
+|---|---|
+| `window_secs` | Window duration |
+| `flows` | Flow records received in the window |
+| `packets` | Total packets across all flows |
+| `bytes` | Total bytes across all flows |
+| `flows_per_sec` / `packets_per_sec` / `bytes_per_sec` | Per-second rates |
+| `unique_src_ips` / `unique_dst_ips` | Distinct source/destination IPs |
+| `top_src_ips` | Top 5 source IPs by bytes (`ip=bytes,...`) |
+| `top_dst_ips` | Top 5 destination IPs by bytes (`ip=bytes,...`) |
+| `protocol_dist` | Flow count per IANA protocol number (`proto=count,...`) |
+
+Example JSON output:
+
+```json
+{
+  "timestamp": "2026-03-07T00:00:10.000Z",
+  "level": "INFO",
+  "fields": {
+    "window_secs": 60,
+    "flows": 120,
+    "packets": 1440,
+    "bytes": 5990400,
+    "flows_per_sec": 2.0,
+    "packets_per_sec": 24.0,
+    "bytes_per_sec": 99840.0,
+    "unique_src_ips": 5,
+    "unique_dst_ips": 1,
+    "top_src_ips": "10.0.0.5=1198080,10.0.0.6=1198080,10.0.0.7=1198080,10.0.0.8=1198080,10.0.0.9=1198080",
+    "top_dst_ips": "1.1.1.1=5990400",
+    "protocol_dist": "6=120",
+    "message": "window_metrics"
+  }
+}
+```
+
+If the analytics receiver falls behind the collector, dropped record counts are logged as warnings:
+
+```json
+{"level":"WARN","fields":{"dropped":42,"message":"analytics receiver lagged, records dropped"}}
+```
+
 ## Testing Without a Router
 
 Send a hand-crafted NetFlow v5 packet using Python:
@@ -185,6 +242,31 @@ print("Sent 1 NetFlow v5 record")
 
 Run Flodar in one terminal, send the packet from another, and confirm the JSON log line appears.
 
+### Using flowgen
+
+The `flowgen` binary generates synthetic NetFlow v5 traffic against a running Flodar instance:
+
+```bash
+cargo run -p flowgen -- --help
+```
+
+```
+Usage: flowgen [OPTIONS]
+
+Options:
+      --target <TARGET>          Destination host:port [default: 127.0.0.1:2055]
+      --flows <FLOWS>            Number of flow records per batch [default: 5]
+      --repeat <REPEAT>          Number of times to send the packet batch [default: 1]
+      --interval-ms <INTERVAL_MS>  Milliseconds to wait between sends [default: 1000]
+  -h, --help                     Print help
+```
+
+Send 100 flows in 10 batches of 10, one batch per second:
+
+```bash
+cargo run -p flowgen -- --flows 10 --repeat 10 --interval-ms 1000
+```
+
 ## Error Handling
 
 Malformed or unsupported packets are logged as warnings and never crash the collector:
@@ -210,11 +292,16 @@ flodar/
  ├─ flodar/
  │  └─ src/
  │     ├─ main.rs                 CLI, config loading, tracing init
- │     ├─ collector/mod.rs        async UDP listener loop
+ │     ├─ collector/mod.rs        async UDP listener; broadcasts FlowRecords
+ │     ├─ analytics/
+ │     │  ├─ mod.rs               drives sliding windows, logs metrics on interval
+ │     │  ├─ metrics.rs           WindowMetrics struct and compute()
+ │     │  └─ window.rs            SlidingWindow with push/evict/compute + tests
  │     └─ decoder/
  │        ├─ flow_record.rs       FlowRecord struct
  │        └─ netflow_v5.rs        NetFlow v5 binary parser + tests
- └─ flowgen/                      traffic generator (not yet implemented)
+ └─ flowgen/                      synthetic NetFlow v5 traffic generator
+    └─ src/main.rs                CLI: --target, --flows, --repeat, --interval-ms
 ```
 
 ## Running Tests
@@ -225,9 +312,11 @@ cargo test
 
 The parser has unit tests covering: single record, multiple records, wrong version, truncated packet, and header/length mismatch.
 
-## What Flodar Does Not Do (v0.1)
+The analytics module has unit tests covering: push and compute, expired record eviction, fresh record retention, and protocol distribution.
+
+## What Flodar Does Not Do (v0.2)
 
 - No NetFlow v9, IPFIX, or sFlow support
 - No storage — logs only
 - No HTTP API or Prometheus metrics
-- No anomaly detection or analytics
+- No anomaly detection

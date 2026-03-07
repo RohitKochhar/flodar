@@ -1,3 +1,4 @@
+mod analytics;
 mod collector;
 mod decoder;
 
@@ -7,7 +8,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.1.0")]
+#[command(name = "flodar", version = "0.2.0")]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -30,6 +31,8 @@ struct Config {
     collector: CollectorConfig,
     #[serde(default)]
     logging: LoggingConfig,
+    #[serde(default)]
+    analytics: AnalyticsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +47,12 @@ struct CollectorConfig {
 struct LoggingConfig {
     #[serde(default = "default_log_level")]
     level: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalyticsConfig {
+    #[serde(default = "default_snapshot_interval_secs")]
+    snapshot_interval_secs: u64,
 }
 
 impl Default for CollectorConfig {
@@ -63,6 +72,14 @@ impl Default for LoggingConfig {
     }
 }
 
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_interval_secs: default_snapshot_interval_secs(),
+        }
+    }
+}
+
 fn default_bind_address() -> String {
     "0.0.0.0".to_string()
 }
@@ -73,6 +90,10 @@ fn default_bind_port() -> u16 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_snapshot_interval_secs() -> u64 {
+    10
 }
 
 #[tokio::main]
@@ -115,5 +136,12 @@ async fn main() -> anyhow::Result<()> {
     .parse()
     .context("invalid bind address")?;
 
-    collector::run(bind_addr).await
+    let (tx, rx) = tokio::sync::broadcast::channel::<decoder::flow_record::FlowRecord>(1024);
+
+    tokio::try_join!(collector::run(bind_addr, tx), async {
+        analytics::run(rx, config.analytics.snapshot_interval_secs).await;
+        Ok(())
+    },)?;
+
+    Ok(())
 }

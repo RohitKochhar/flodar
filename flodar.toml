@@ -5,3 +5,6 @@ bind_port = 2055
 [logging]
 level = "info"
 format = "json"
+
+[analytics]
+snapshot_interval_secs = 10
