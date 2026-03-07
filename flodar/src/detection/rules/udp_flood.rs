@@ -52,6 +52,12 @@ pub fn evaluate(metrics: &WindowMetrics, config: &UdpFloodConfig) -> Option<Aler
     let sources_ok = metrics.unique_src_ips >= config.min_unique_sources;
 
     if pps_ok && ratio_ok && sources_ok {
+        let top_dsts = metrics
+            .top_dst_ips
+            .iter()
+            .map(|(ip, bytes)| format!("{ip}({bytes}B)"))
+            .collect::<Vec<_>>()
+            .join(", ");
         Some(Alert {
             rule: "udp_flood".to_string(),
             severity: Severity::High,
@@ -71,6 +77,8 @@ pub fn evaluate(metrics: &WindowMetrics, config: &UdpFloodConfig) -> Option<Aler
                     "unique source IPs: {} (threshold: {})",
                     metrics.unique_src_ips, config.min_unique_sources
                 ),
+                format!("unique destination IPs: {}", metrics.unique_dst_ips),
+                format!("top destination IPs: {}", top_dsts),
             ],
             triggered_at: std::time::SystemTime::now(),
         })

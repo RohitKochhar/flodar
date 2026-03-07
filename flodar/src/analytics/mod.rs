@@ -4,11 +4,13 @@ mod window;
 use metrics::WindowMetrics;
 use window::SlidingWindow;
 
+use crate::api::SharedState;
 use crate::decoder::flow_record::FlowRecord;
 
 pub async fn run(
     mut rx: tokio::sync::broadcast::Receiver<FlowRecord>,
     metrics_tx: tokio::sync::broadcast::Sender<WindowMetrics>,
+    shared_state: SharedState,
     snapshot_interval_secs: u64,
 ) {
     let mut windows = vec![
@@ -43,9 +45,20 @@ pub async fn run(
             _ = interval.tick() => {
                 for window in &mut windows {
                     window.evict_expired();
-                    let metrics = window.compute();
-                    log_metrics(&metrics);
-                    let _ = metrics_tx.send(metrics);
+                    let m = window.compute();
+                    log_metrics(&m);
+
+                    {
+                        let mut state = shared_state.write().await;
+                        match m.window_secs {
+                            10  => state.window_10s  = Some(m.clone()),
+                            60  => state.window_60s  = Some(m.clone()),
+                            300 => state.window_300s = Some(m.clone()),
+                            _   => {}
+                        }
+                    }
+
+                    let _ = metrics_tx.send(m);
                 }
             }
         }

@@ -1,7 +1,10 @@
 mod analytics;
+mod api;
 mod collector;
 mod decoder;
 mod detection;
+
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
@@ -9,7 +12,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.3.0")]
+#[command(name = "flodar", version = "0.4.0")]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -36,6 +39,8 @@ struct Config {
     analytics: AnalyticsConfig,
     #[serde(default)]
     detection: detection::DetectionConfig,
+    #[serde(default)]
+    api: ApiConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +61,16 @@ struct LoggingConfig {
 struct AnalyticsConfig {
     #[serde(default = "default_snapshot_interval_secs")]
     snapshot_interval_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiConfig {
+    #[serde(default = "default_api_bind_address")]
+    bind_address: String,
+    #[serde(default = "default_api_bind_port")]
+    bind_port: u16,
+    #[serde(default = "default_api_enabled")]
+    enabled: bool,
 }
 
 impl Default for CollectorConfig {
@@ -83,6 +98,16 @@ impl Default for AnalyticsConfig {
     }
 }
 
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            bind_address: default_api_bind_address(),
+            bind_port: default_api_bind_port(),
+            enabled: default_api_enabled(),
+        }
+    }
+}
+
 fn default_bind_address() -> String {
     "0.0.0.0".to_string()
 }
@@ -97,6 +122,18 @@ fn default_log_level() -> String {
 
 fn default_snapshot_interval_secs() -> u64 {
     10
+}
+
+fn default_api_bind_address() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_api_bind_port() -> u16 {
+    9090
+}
+
+fn default_api_enabled() -> bool {
+    true
 }
 
 #[tokio::main]
@@ -137,22 +174,70 @@ async fn main() -> anyhow::Result<()> {
         config.collector.bind_address, config.collector.bind_port
     )
     .parse()
-    .context("invalid bind address")?;
+    .context("invalid collector bind address")?;
+
+    let api_addr: SocketAddr = format!("{}:{}", config.api.bind_address, config.api.bind_port)
+        .parse()
+        .context("invalid API bind address")?;
+
+    let shared_state: api::SharedState =
+        Arc::new(tokio::sync::RwLock::new(api::AppState::default()));
+
+    let prometheus_registry = prometheus::Registry::new();
+    let prom_metrics = Arc::new(
+        api::FlodarMetrics::new(&prometheus_registry)
+            .context("failed to register prometheus metrics")?,
+    );
 
     let (flow_tx, flow_rx) =
         tokio::sync::broadcast::channel::<decoder::flow_record::FlowRecord>(1024);
     let (metrics_tx, metrics_rx) =
         tokio::sync::broadcast::channel::<analytics::metrics::WindowMetrics>(256);
 
+    let api_enabled = config.api.enabled;
+    let api_shared_state = shared_state.clone();
+    let api_prom_metrics = prom_metrics.clone();
+
     tokio::try_join!(
-        collector::run(bind_addr, flow_tx),
+        collector::run(
+            bind_addr,
+            flow_tx,
+            shared_state.clone(),
+            prom_metrics.clone()
+        ),
         async {
-            analytics::run(flow_rx, metrics_tx, config.analytics.snapshot_interval_secs).await;
+            analytics::run(
+                flow_rx,
+                metrics_tx,
+                shared_state.clone(),
+                config.analytics.snapshot_interval_secs,
+            )
+            .await;
             Ok(())
         },
         async {
-            detection::run(metrics_rx, config.detection).await;
+            detection::run(
+                metrics_rx,
+                config.detection,
+                shared_state.clone(),
+                prom_metrics.clone(),
+            )
+            .await;
             Ok(())
+        },
+        async move {
+            if api_enabled {
+                api::run(
+                    api_addr,
+                    api_shared_state,
+                    prometheus_registry,
+                    api_prom_metrics,
+                )
+                .await
+            } else {
+                tracing::info!("HTTP API disabled");
+                Ok(())
+            }
         },
     )?;
 

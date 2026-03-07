@@ -1,6 +1,6 @@
 # Flodar
 
-Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, emits one structured JSON log line per flow record, continuously computes sliding-window traffic analytics, and fires explainable alerts when traffic patterns match known attack signatures.
+Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP, decodes each packet, emits one structured JSON log line per flow record, continuously computes sliding-window traffic analytics, fires explainable alerts when traffic patterns match known attack signatures, and exposes a Prometheus metrics endpoint and JSON HTTP API for integration with any observability stack.
 
 ## Requirements
 
@@ -52,6 +52,11 @@ format = "json"             # Log format: json | pretty
 
 [analytics]
 snapshot_interval_secs = 10  # How often to emit window_metrics log lines (seconds).
+
+[api]
+bind_address = "0.0.0.0"   # Interface for the HTTP API and metrics server.
+bind_port = 9090            # Conventional Prometheus exporter port.
+enabled = true              # Set to false to disable the HTTP server entirely.
 
 [detection]
 enabled = true
@@ -160,6 +165,104 @@ Useful for development and manual inspection:
     packets: 42
     bytes: 58240
     ...
+```
+
+## HTTP API
+
+Flodar runs an HTTP server (default port `9090`) alongside the flow pipeline. All endpoints are read-only and require no authentication.
+
+### `GET /health`
+
+Liveness check. Returns `200 OK` as long as the process is running.
+
+```json
+{"status": "ok", "uptime_secs": 3600, "version": "0.4.0"}
+```
+
+### `GET /metrics`
+
+Prometheus text exposition format. Point a Prometheus scrape job here.
+
+```
+# HELP flodar_flows_total Total flow records ingested since startup
+# TYPE flodar_flows_total counter
+flodar_flows_total 14523
+# HELP flodar_flows_per_sec Flows per second by window
+# TYPE flodar_flows_per_sec gauge
+flodar_flows_per_sec{window="10s"} 42.3
+flodar_flows_per_sec{window="60s"} 38.1
+flodar_flows_per_sec{window="300s"} 35.7
+...
+```
+
+**Metrics reference:**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `flodar_flows_total` | counter | — | Total flow records ingested since startup |
+| `flodar_packets_total` | counter | — | Total packets across all flows |
+| `flodar_bytes_total` | counter | — | Total bytes across all flows |
+| `flodar_alerts_total` | counter | `rule` | Alerts fired, partitioned by rule name |
+| `flodar_active_exporters` | gauge | — | Unique exporter IPs seen in last 5 min |
+| `flodar_flows_per_sec` | gauge | `window` | Flows/sec for `10s`, `60s`, `300s` windows |
+| `flodar_packets_per_sec` | gauge | `window` | Packets/sec per window |
+| `flodar_bytes_per_sec` | gauge | `window` | Bytes/sec per window |
+| `flodar_unique_src_ips` | gauge | `window` | Unique source IPs per window |
+| `flodar_unique_dst_ips` | gauge | `window` | Unique destination IPs per window |
+
+A ready-to-use Prometheus scrape config is provided in [`examples/prometheus.yml`](examples/prometheus.yml).
+
+### `GET /api/summary`
+
+Current traffic snapshot from the 10 s window. Returns `503` if no window has been computed yet (first 10 s after startup).
+
+```json
+{
+  "window_secs": 10,
+  "flows_per_sec": 42.3,
+  "packets_per_sec": 312.1,
+  "bytes_per_sec": 184320.0,
+  "unique_src_ips": 14,
+  "unique_dst_ips": 3,
+  "active_exporters": 1,
+  "uptime_secs": 3600
+}
+```
+
+### `GET /api/top-talkers`
+
+Top 5 source and destination IPs by bytes from the 60 s window. Returns `503` if not enough data yet.
+
+```json
+{
+  "window_secs": 60,
+  "top_sources": [
+    {"ip": "10.0.0.5", "bytes": 2048000, "bytes_per_sec": 34133.3}
+  ],
+  "top_destinations": [
+    {"ip": "1.1.1.1", "bytes": 1843200, "bytes_per_sec": 30720.0}
+  ]
+}
+```
+
+### `GET /api/alerts`
+
+Most recent alerts, newest first. Optional `?limit=N` parameter (default 20, max 100).
+
+```json
+{
+  "total": 3,
+  "alerts": [
+    {
+      "rule": "udp_flood",
+      "severity": "High",
+      "target_ip": null,
+      "window_secs": 10,
+      "indicators": ["packets/sec: 3400 (threshold: 1000)", "UDP ratio: 92% (threshold: 80%)"],
+      "triggered_at": "2026-03-07T15:00:00Z"
+    }
+  ]
+}
 ```
 
 ## Analytics
@@ -333,35 +436,6 @@ Possible decode errors:
 | `packet too short: expected N, got M` | Truncated or corrupt packet |
 | `length mismatch: header count N, data fits M` | Record count in header doesn't match actual packet size |
 
-## Project Layout
-
-```
-flodar/
- ├─ Cargo.toml                   workspace manifest
- ├─ flodar.toml                   default configuration
- ├─ flodar/
- │  └─ src/
- │     ├─ main.rs                 CLI, config loading, tracing init, task wiring
- │     ├─ collector/mod.rs        async UDP listener; broadcasts FlowRecords
- │     ├─ analytics/
- │     │  ├─ mod.rs               drives sliding windows, logs + broadcasts metrics
- │     │  ├─ metrics.rs           WindowMetrics struct and compute()
- │     │  └─ window.rs            SlidingWindow with push/evict/compute + tests
- │     ├─ decoder/
- │     │  ├─ flow_record.rs       FlowRecord struct
- │     │  └─ netflow_v5.rs        NetFlow v5 binary parser + tests
- │     └─ detection/
- │        ├─ mod.rs               DetectionConfig, run() loop, alert cooldown
- │        ├─ alert.rs             Alert struct, Severity enum, log_alert()
- │        └─ rules/
- │           ├─ udp_flood.rs      UDP flood rule + tests
- │           ├─ syn_flood.rs      SYN flood rule + tests
- │           ├─ port_scan.rs      port scan rule + tests
- │           └─ destination_hotspot.rs  destination hotspot rule + tests
- └─ flowgen/                      synthetic NetFlow v5 traffic generator
-    └─ src/main.rs                normal + 4 attack simulation modes
-```
-
 ## Running Tests
 
 ```bash
@@ -384,17 +458,60 @@ cargo test
 ```
                           broadcast (FlowRecord)
 FlowRecord ──────────────────────────────────────► analytics engine
-                                                         │
-                                               broadcast (WindowMetrics)
-                                                    ┌────┴────┐
-                                               log_metrics   detection engine
-                                                              │
-                                                         log_alert (WARN)
+     │                                                    │
+     │ (SharedState)                           broadcast (WindowMetrics)
+     ▼                                              ┌─────┴─────┐
+SharedState ◄──────────────────────────────── log_metrics   detection engine
+     │                                                          │
+     ▼                                                     log_alert (WARN)
+ api::run()
+     │
+     ├─ GET /metrics       (Prometheus text format)
+     ├─ GET /health
+     ├─ GET /api/summary
+     ├─ GET /api/top-talkers
+     └─ GET /api/alerts
 ```
 
-## What Flodar Does Not Do (v0.3)
+## Project Layout
+
+```
+flodar/
+ ├─ Cargo.toml                   workspace manifest
+ ├─ examples/
+ │  └─ prometheus.yml            ready-to-use Prometheus scrape config
+ ├─ flodar/
+ │  └─ src/
+ │     ├─ main.rs                 CLI, config loading, tracing init, task wiring
+ │     ├─ collector/mod.rs        async UDP listener; broadcasts FlowRecords
+ │     ├─ analytics/
+ │     │  ├─ mod.rs               drives sliding windows, logs + broadcasts metrics
+ │     │  ├─ metrics.rs           WindowMetrics struct and compute()
+ │     │  └─ window.rs            SlidingWindow with push/evict/compute + tests
+ │     ├─ decoder/
+ │     │  ├─ flow_record.rs       FlowRecord struct
+ │     │  └─ netflow_v5.rs        NetFlow v5 binary parser + tests
+ │     ├─ detection/
+ │     │  ├─ mod.rs               DetectionConfig, run() loop, alert cooldown
+ │     │  ├─ alert.rs             Alert struct, Severity enum, log_alert()
+ │     │  └─ rules/
+ │     │     ├─ udp_flood.rs      UDP flood rule + tests
+ │     │     ├─ syn_flood.rs      SYN flood rule + tests
+ │     │     ├─ port_scan.rs      port scan rule + tests
+ │     │     └─ destination_hotspot.rs  destination hotspot rule + tests
+ │     └─ api/
+ │        ├─ mod.rs               Axum router, run() entrypoint
+ │        ├─ state.rs             AppState struct, SharedState type alias
+ │        ├─ metrics.rs           FlodarMetrics — all prometheus metric handles
+ │        └─ handlers.rs          HTTP route handler functions
+ └─ flowgen/                      synthetic NetFlow v5 traffic generator
+    └─ src/main.rs                normal + 4 attack simulation modes
+```
+
+## What Flodar Does Not Do (v0.4)
 
 - No NetFlow v9, IPFIX, or sFlow support
-- No storage — logs only
-- No HTTP API or Prometheus metrics endpoint (v0.4)
+- No storage — logs and in-memory state only
+- No authentication or TLS on the HTTP API
+- No Grafana dashboard definitions (planned for v0.5)
 - No ML-based or statistical anomaly detection — all rules are threshold-based
