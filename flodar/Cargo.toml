@@ -3,6 +3,10 @@ name = "flodar"
 version = "0.5.0"
 edition = "2021"
 
+[lib]
+name = "flodar"
+path = "src/lib.rs"
+
 [[bin]]
 name = "flodar"
 path = "src/main.rs"

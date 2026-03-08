@@ -1,8 +1,4 @@
-mod analytics;
-mod api;
-mod collector;
-mod decoder;
-mod detection;
+use flodar::{analytics, api, collector, decoder, detection};
 
 use std::sync::Arc;
 

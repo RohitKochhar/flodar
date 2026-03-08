@@ -26,6 +26,12 @@ pub struct TemplateCache {
     templates: HashMap<TemplateKey, Template>,
 }
 
+impl Default for TemplateCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TemplateCache {
     pub fn new() -> Self {
         Self {
