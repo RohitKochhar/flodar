@@ -1,8 +1,10 @@
 # Stage 1: build
-FROM rust:1.82-slim AS builder
+FROM rust:1.83-slim AS builder
+ARG FEATURES=""
 WORKDIR /app
 COPY . .
-RUN cargo build --release -p flodar
+RUN cargo build --release -p flodar \
+    $([ -n "$FEATURES" ] && echo "--features $FEATURES" || true)
 
 # Stage 2: runtime
 FROM debian:bookworm-slim
