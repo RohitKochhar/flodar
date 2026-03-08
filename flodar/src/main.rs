@@ -318,50 +318,42 @@ async fn main() -> anyhow::Result<()> {
     let api_prom_metrics = prom_metrics.clone();
     let accepted_versions = config.collector.accepted_versions.clone();
 
-    tokio::try_join!(
-        collector::run(
+    // select! drops all other branches when any one completes, so a signal or
+    // a fatal subsystem error causes immediate shutdown of the whole process.
+    tokio::select! {
+        r = collector::run(
             bind_addr,
             flow_tx,
             shared_state.clone(),
             prom_metrics.clone(),
             ipfix_addr,
             accepted_versions,
-        ),
-        async {
-            analytics::run(
-                flow_rx,
-                metrics_tx,
-                shared_state.clone(),
-                config.analytics.snapshot_interval_secs,
-            )
-            .await;
-            Ok(())
-        },
-        async {
-            detection::run(
-                metrics_rx,
-                config.detection,
-                shared_state.clone(),
-                prom_metrics.clone(),
-            )
-            .await;
-            Ok(())
-        },
-        async move {
+        ) => r?,
+
+        () = analytics::run(
+            flow_rx,
+            metrics_tx,
+            shared_state.clone(),
+            config.analytics.snapshot_interval_secs,
+        ) => {},
+
+        () = detection::run(
+            metrics_rx,
+            config.detection,
+            shared_state.clone(),
+            prom_metrics.clone(),
+        ) => {},
+
+        r = async move {
             if api_enabled {
-                api::run(
-                    api_addr,
-                    api_shared_state,
-                    prometheus_registry,
-                    api_prom_metrics,
-                )
-                .await
+                api::run(api_addr, api_shared_state, prometheus_registry, api_prom_metrics).await
             } else {
                 tracing::info!("HTTP API disabled");
                 Ok(())
             }
-        },
-        async {
+        } => r?,
+
+        r = async {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{signal, SignalKind};
@@ -379,9 +371,9 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("ctrl-c handler: {e}"))?;
             }
             tracing::info!("shutting down");
-            Ok(())
-        },
-    )?;
+            Ok::<(), anyhow::Error>(())
+        } => r?,
+    }
 
     Ok(())
 }

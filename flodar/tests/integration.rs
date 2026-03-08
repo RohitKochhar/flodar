@@ -6,8 +6,11 @@
 //!
 //! Layout:
 //!   - Protocol decoding tests (v5 / v9 / IPFIX) — exercise collector → shared state
-//!   - Version filter test                         — exercise accepted_versions gate
-//!   - Detection test                              — exercise detection engine in isolation
+//!   - Prometheus metrics test                    — exercise instrumentation counters
+//!   - Dual-socket test                           — exercise secondary IPFIX port
+//!   - Version filter tests (v9 + IPFIX)          — exercise accepted_versions gate
+//!   - Detection test                             — exercise detection engine in isolation
+//!   - SIGTERM test (Unix only)                   — exercise graceful shutdown
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -377,4 +380,168 @@ async fn udp_flood_detection_fires_alert() {
 
     assert_eq!(alert_count, 1, "exactly one alert should have fired");
     assert_eq!(alert_rule, "udp_flood");
+}
+
+/// Prometheus counters (flows, packets, bytes) increment when flows are received.
+/// This validates that the collector's instrumentation path is wired correctly,
+/// independent of the shared-state assertions in the protocol decoding tests.
+#[tokio::test]
+async fn prometheus_metrics_increment() {
+    let addr = ephemeral_addr().await;
+    let (state, metrics) = make_infra();
+    let (flow_tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    // Clone the Arc so we can inspect the counters after the collector runs.
+    let metrics_for_collector = metrics.clone();
+    let s = state.clone();
+    let handle = tokio::spawn(async move {
+        flodar::collector::run(addr, flow_tx, s, metrics_for_collector, None, vec![]).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    sender.send_to(&nf5_packet(2), addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    handle.abort();
+
+    assert_eq!(
+        metrics.flows_total.get(),
+        2.0,
+        "flows_total should equal record count"
+    );
+    assert!(
+        metrics.packets_total.get() > 0.0,
+        "packets_total should be non-zero"
+    );
+    assert!(
+        metrics.bytes_total.get() > 0.0,
+        "bytes_total should be non-zero"
+    );
+}
+
+/// Dual-socket: when `ipfix_addr` is set, flows sent to the secondary IPFIX port
+/// are decoded and counted alongside flows on the primary port.
+#[tokio::test]
+async fn dual_socket_ipfix_port() {
+    let main_addr = ephemeral_addr().await;
+    let ipfix_addr = ephemeral_addr().await;
+    let (state, metrics) = make_infra();
+    let (flow_tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    let s = state.clone();
+    let handle = tokio::spawn(async move {
+        flodar::collector::run(main_addr, flow_tx, s, metrics, Some(ipfix_addr), vec![]).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    // Send directly to the secondary IPFIX port, not the main collector port.
+    sender.send_to(&ipfix_packet(), ipfix_addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let flows = state.read().await.total_flows;
+    handle.abort();
+
+    assert_eq!(
+        flows, 1,
+        "IPFIX flows on the secondary port should be decoded"
+    );
+}
+
+/// accepted_versions: when configured to accept only v5, an IPFIX (v10) packet
+/// must be silently dropped, leaving the flow counter at zero.
+#[tokio::test]
+async fn accepted_versions_filter_drops_ipfix() {
+    let addr = ephemeral_addr().await;
+    let (state, metrics) = make_infra();
+    let (flow_tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    let s = state.clone();
+    let handle = tokio::spawn(async move {
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5]).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    sender.send_to(&ipfix_packet(), addr).await.unwrap(); // v10 not in [5]
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let flows = state.read().await.total_flows;
+    handle.abort();
+
+    assert_eq!(
+        flows, 0,
+        "IPFIX packet should be dropped when accepted_versions = [5]"
+    );
+}
+
+/// SIGTERM: the binary exits with code 0 when sent SIGTERM.
+/// Uses `CARGO_BIN_EXE_flodar` so the test always runs against the binary that was
+/// just compiled — no stale artifacts.
+///
+/// Readiness is detected by polling the HTTP API port rather than parsing log output,
+/// which makes the test independent of log format and tracing configuration.
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_exits_cleanly() {
+    use std::process::{Command, Stdio};
+
+    // Acquire two free ports for the config file.
+    let collector_port = ephemeral_addr().await.port();
+    let api_port = ephemeral_addr().await.port();
+
+    // Use the process ID in the filename so parallel test runs don't collide.
+    let config_path =
+        std::env::temp_dir().join(format!("flodar-sigterm-test-{}.toml", std::process::id()));
+    std::fs::write(
+        &config_path,
+        format!("[collector]\nbind_port = {collector_port}\n\n[api]\nbind_port = {api_port}\n"),
+    )
+    .unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_flodar");
+    let mut child = Command::new(binary)
+        .args(["--config", config_path.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn flodar binary");
+
+    // Poll the HTTP API port until the server is accepting connections.
+    // This is format-agnostic and confirms the process is fully initialised.
+    let api_addr = format!("127.0.0.1:{api_port}");
+    let ready = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if tokio::net::TcpStream::connect(&api_addr).await.is_ok() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(ready, "flodar API port did not become reachable within 5 s");
+
+    let pid = child.id();
+    Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .unwrap();
+
+    let status = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || child.wait().unwrap()),
+    )
+    .await
+    .expect("flodar did not exit within 5 s after SIGTERM")
+    .unwrap();
+
+    let _ = std::fs::remove_file(&config_path);
+
+    assert!(
+        status.success(),
+        "expected exit code 0 after SIGTERM, got {:?}",
+        status
+    );
 }
