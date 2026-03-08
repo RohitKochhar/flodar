@@ -48,6 +48,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --all
+      - name: Build with loki feature
+        run: cargo build --release -p flodar --features loki
 
   audit:
     name: Security Audit
