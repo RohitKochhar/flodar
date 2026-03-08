@@ -1,5 +1,5 @@
 # Stage 1: build
-FROM rust:1.77-slim AS builder
+FROM rust:1.82-slim AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release -p flodar
