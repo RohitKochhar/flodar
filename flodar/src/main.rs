@@ -1,8 +1,4 @@
-mod analytics;
-mod api;
-mod collector;
-mod decoder;
-mod detection;
+use flodar::{analytics, api, collector, decoder, detection};
 
 use std::sync::Arc;
 
@@ -12,7 +8,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.4.0")]
+#[command(name = "flodar", version = "0.6.0")]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -43,12 +39,41 @@ struct Config {
     api: ApiConfig,
 }
 
+impl Config {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.collector.bind_address.is_empty(),
+            "collector.bind_address must not be empty"
+        );
+        anyhow::ensure!(
+            self.collector.bind_port != 0,
+            "collector.bind_port must be non-zero"
+        );
+        anyhow::ensure!(self.api.bind_port != 0, "api.bind_port must be non-zero");
+        anyhow::ensure!(
+            self.analytics.snapshot_interval_secs > 0,
+            "analytics.snapshot_interval_secs must be > 0"
+        );
+        for &v in &self.collector.accepted_versions {
+            anyhow::ensure!(
+                v == 5 || v == 9 || v == 10,
+                "accepted_versions contains unsupported version {v} (must be 5, 9, or 10)"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct CollectorConfig {
     #[serde(default = "default_bind_address")]
     bind_address: String,
     #[serde(default = "default_bind_port")]
     bind_port: u16,
+    #[serde(default)]
+    accepted_versions: Vec<u16>,
+    #[serde(default)]
+    bind_port_ipfix: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +115,8 @@ impl Default for CollectorConfig {
         Self {
             bind_address: default_bind_address(),
             bind_port: default_bind_port(),
+            accepted_versions: Vec::new(),
+            bind_port_ipfix: None,
         }
     }
 }
@@ -163,6 +190,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Config::default()
     };
+
+    config.validate()?;
 
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| config.logging.level.clone());
 
@@ -260,6 +289,16 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("invalid API bind address")?;
 
+    let ipfix_addr: Option<SocketAddr> = if let Some(port) = config.collector.bind_port_ipfix {
+        Some(
+            format!("{}:{}", config.collector.bind_address, port)
+                .parse()
+                .context("invalid IPFIX bind address")?,
+        )
+    } else {
+        None
+    };
+
     let shared_state: api::SharedState =
         Arc::new(tokio::sync::RwLock::new(api::AppState::default()));
 
@@ -277,49 +316,64 @@ async fn main() -> anyhow::Result<()> {
     let api_enabled = config.api.enabled;
     let api_shared_state = shared_state.clone();
     let api_prom_metrics = prom_metrics.clone();
+    let accepted_versions = config.collector.accepted_versions.clone();
 
-    tokio::try_join!(
-        collector::run(
+    // select! drops all other branches when any one completes, so a signal or
+    // a fatal subsystem error causes immediate shutdown of the whole process.
+    tokio::select! {
+        r = collector::run(
             bind_addr,
             flow_tx,
             shared_state.clone(),
-            prom_metrics.clone()
-        ),
-        async {
-            analytics::run(
-                flow_rx,
-                metrics_tx,
-                shared_state.clone(),
-                config.analytics.snapshot_interval_secs,
-            )
-            .await;
-            Ok(())
-        },
-        async {
-            detection::run(
-                metrics_rx,
-                config.detection,
-                shared_state.clone(),
-                prom_metrics.clone(),
-            )
-            .await;
-            Ok(())
-        },
-        async move {
+            prom_metrics.clone(),
+            ipfix_addr,
+            accepted_versions,
+        ) => r?,
+
+        () = analytics::run(
+            flow_rx,
+            metrics_tx,
+            shared_state.clone(),
+            config.analytics.snapshot_interval_secs,
+        ) => {},
+
+        () = detection::run(
+            metrics_rx,
+            config.detection,
+            shared_state.clone(),
+            prom_metrics.clone(),
+        ) => {},
+
+        r = async move {
             if api_enabled {
-                api::run(
-                    api_addr,
-                    api_shared_state,
-                    prometheus_registry,
-                    api_prom_metrics,
-                )
-                .await
+                api::run(api_addr, api_shared_state, prometheus_registry, api_prom_metrics).await
             } else {
                 tracing::info!("HTTP API disabled");
                 Ok(())
             }
-        },
-    )?;
+        } => r?,
+
+        r = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate())
+                    .map_err(|e| anyhow::anyhow!("SIGTERM handler: {e}"))?;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("ctrl-c handler: {e}"))?;
+            }
+            tracing::info!("shutting down");
+            Ok::<(), anyhow::Error>(())
+        } => r?,
+    }
 
     Ok(())
 }

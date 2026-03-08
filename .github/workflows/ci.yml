@@ -32,13 +32,23 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
-    name: Test
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all
+      - run: cargo test --workspace --lib --bins
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --test integration --package flodar
 
   build:
     name: Release Build
@@ -64,7 +74,7 @@ jobs:
   publish:
     name: Publish Docker Image
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, test, build, audit]
+    needs: [fmt, clippy, test, integration, build, audit]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
