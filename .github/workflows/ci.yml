@@ -65,6 +65,7 @@ jobs:
     name: Publish Docker Image
     runs-on: ubuntu-latest
     needs: [fmt, clippy, test, build, audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
@@ -81,9 +82,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=pr
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest
+            type=sha,prefix=,format=short
       - uses: docker/build-push-action@v6
         with:
           context: .
