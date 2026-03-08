@@ -1,18 +1,9 @@
+// TODO(v1.0): audit unwrap() usage — none found in production paths; test helpers use unwrap() intentionally
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::SystemTime;
-use thiserror::Error;
 
 use super::flow_record::FlowRecord;
-
-#[derive(Error, Debug)]
-pub enum DecodeError {
-    #[error("unsupported version: {0}")]
-    UnsupportedVersion(u16),
-    #[error("packet too short: expected {expected}, got {actual}")]
-    TooShort { expected: usize, actual: usize },
-    #[error("length mismatch: header count {header}, data fits {fits}")]
-    LengthMismatch { header: u16, fits: usize },
-}
+pub use super::DecodeError;
 
 const HEADER_LEN: usize = 24;
 const RECORD_LEN: usize = 48;

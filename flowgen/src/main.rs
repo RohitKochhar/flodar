@@ -10,6 +10,8 @@ enum Mode {
     SynFlood,
     PortScan,
     Hotspot,
+    NetflowV9,
+    Ipfix,
 }
 
 #[derive(Parser)]
@@ -75,6 +77,8 @@ fn main() {
         Mode::SynFlood => run_syn_flood(&socket, &args),
         Mode::PortScan => run_port_scan(&socket, &args),
         Mode::Hotspot => run_hotspot(&socket, &args),
+        Mode::NetflowV9 => run_netflow_v9(&socket, &args),
+        Mode::Ipfix => run_ipfix(&socket, &args),
     }
 }
 
@@ -443,4 +447,182 @@ fn build_packet(count: u16, sequence: u32, offset: u16, params: FlowParams) -> V
     }
 
     buf
+}
+
+// --- NetFlow v9 mode ---
+// Sends a single UDP datagram containing a template flowset + data flowset.
+
+fn run_netflow_v9(socket: &UdpSocket, args: &Args) {
+    let flows = args.flows as usize;
+    let pkt = build_netflow_v9_packet(flows);
+    socket.send_to(&pkt, &args.target).expect("send failed");
+    println!(
+        "flowgen: netflow-v9 — sent {} flow(s) to {}",
+        flows, args.target
+    );
+}
+
+fn build_netflow_v9_packet(flows: usize) -> Vec<u8> {
+    const TEMPLATE_ID: u16 = 256;
+    // Fields: (type, length)
+    let fields: &[(u16, u16)] = &[
+        (8, 4),  // IPV4_SRC_ADDR
+        (12, 4), // IPV4_DST_ADDR
+        (7, 2),  // L4_SRC_PORT
+        (11, 2), // L4_DST_PORT
+        (4, 1),  // PROTOCOL
+        (2, 4),  // IN_PKTS
+        (1, 4),  // IN_BYTES
+        (22, 4), // FIRST_SWITCHED
+        (21, 4), // LAST_SWITCHED
+        (6, 1),  // TCP_FLAGS
+    ];
+    let record_len: usize = fields.iter().map(|(_, l)| *l as usize).sum(); // 30
+
+    // Template FlowSet:
+    // 4-byte flowset header + 4-byte template record header + 10*4 = 40 bytes field defs = 48 bytes
+    let tmpl_flowset_len: u16 = 4 + 4 + (fields.len() as u16) * 4; // 48
+
+    // Data FlowSet:
+    let data_payload = flows * record_len;
+    let data_with_header = 4 + data_payload;
+    let data_padding = (4 - data_with_header % 4) % 4;
+    let data_flowset_len = data_with_header + data_padding;
+
+    let mut pkt = Vec::new();
+
+    // NF9 Header (20 bytes)
+    pkt.extend_from_slice(&9u16.to_be_bytes()); // version = 9
+    pkt.extend_from_slice(&2u16.to_be_bytes()); // count = 2 flowsets
+    pkt.extend_from_slice(&100_000u32.to_be_bytes()); // sysuptime
+    pkt.extend_from_slice(&0u32.to_be_bytes()); // unix_secs
+    pkt.extend_from_slice(&1u32.to_be_bytes()); // sequence
+    pkt.extend_from_slice(&0u32.to_be_bytes()); // source_id
+
+    // Template FlowSet header
+    pkt.extend_from_slice(&0u16.to_be_bytes()); // flowset ID = 0
+    pkt.extend_from_slice(&tmpl_flowset_len.to_be_bytes());
+
+    // Template record header
+    pkt.extend_from_slice(&TEMPLATE_ID.to_be_bytes());
+    pkt.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+
+    // Field definitions
+    for (ftype, flen) in fields {
+        pkt.extend_from_slice(&ftype.to_be_bytes());
+        pkt.extend_from_slice(&flen.to_be_bytes());
+    }
+
+    // Data FlowSet header
+    pkt.extend_from_slice(&TEMPLATE_ID.to_be_bytes()); // flowset ID = 256
+    pkt.extend_from_slice(&(data_flowset_len as u16).to_be_bytes());
+
+    // Flow records
+    for i in 0..flows {
+        let src_ip: u32 = 0x0a000001u32.wrapping_add(i as u32);
+        let dst_ip: u32 = 0x0a010101;
+        pkt.extend_from_slice(&src_ip.to_be_bytes()); // IPV4_SRC_ADDR
+        pkt.extend_from_slice(&dst_ip.to_be_bytes()); // IPV4_DST_ADDR
+        pkt.extend_from_slice(&54321u16.to_be_bytes()); // L4_SRC_PORT
+        pkt.extend_from_slice(&443u16.to_be_bytes()); // L4_DST_PORT
+        pkt.push(6u8); // PROTOCOL = TCP
+        pkt.extend_from_slice(&12u32.to_be_bytes()); // IN_PKTS
+        pkt.extend_from_slice(&5840u32.to_be_bytes()); // IN_BYTES
+        pkt.extend_from_slice(&90_000u32.to_be_bytes()); // FIRST_SWITCHED
+        pkt.extend_from_slice(&100_000u32.to_be_bytes()); // LAST_SWITCHED
+        pkt.push(0x18u8); // TCP_FLAGS
+    }
+
+    // Padding
+    pkt.extend(std::iter::repeat_n(0u8, data_padding));
+
+    pkt
+}
+
+// --- IPFIX mode ---
+// Sends a single UDP datagram containing a template set + data set.
+// IANA default port for IPFIX is 4739; users can override with --target.
+
+fn run_ipfix(socket: &UdpSocket, args: &Args) {
+    let flows = args.flows as usize;
+    let pkt = build_ipfix_packet(flows);
+    socket.send_to(&pkt, &args.target).expect("send failed");
+    println!("flowgen: ipfix — sent {} flow(s) to {}", flows, args.target);
+}
+
+fn build_ipfix_packet(flows: usize) -> Vec<u8> {
+    const TEMPLATE_ID: u16 = 256;
+    let fields: &[(u16, u16)] = &[
+        (8, 4),  // IPV4_SRC_ADDR
+        (12, 4), // IPV4_DST_ADDR
+        (7, 2),  // L4_SRC_PORT
+        (11, 2), // L4_DST_PORT
+        (4, 1),  // PROTOCOL
+        (2, 4),  // IN_PKTS
+        (1, 4),  // IN_BYTES
+        (22, 4), // FIRST_SWITCHED
+        (21, 4), // LAST_SWITCHED
+        (6, 1),  // TCP_FLAGS
+    ];
+    let record_len: usize = fields.iter().map(|(_, l)| *l as usize).sum(); // 30
+
+    // Template Set:
+    // 4-byte set header + 4-byte template record header + 10*4 field defs = 48 bytes total
+    let tmpl_set_len: u16 = 4 + 4 + (fields.len() as u16) * 4; // 48
+
+    // Data Set:
+    let data_payload = flows * record_len;
+    let data_with_header = 4 + data_payload;
+    let data_padding = (4 - data_with_header % 4) % 4;
+    let data_set_len = data_with_header + data_padding;
+
+    let total_len: u16 = 16 + tmpl_set_len + data_set_len as u16;
+
+    let mut pkt = Vec::new();
+
+    // IPFIX Header (16 bytes)
+    pkt.extend_from_slice(&10u16.to_be_bytes()); // version = 10
+    pkt.extend_from_slice(&total_len.to_be_bytes()); // length
+    pkt.extend_from_slice(&0u32.to_be_bytes()); // export_time
+    pkt.extend_from_slice(&1u32.to_be_bytes()); // sequence
+    pkt.extend_from_slice(&0u32.to_be_bytes()); // observation_domain_id
+
+    // Template Set header
+    pkt.extend_from_slice(&2u16.to_be_bytes()); // set ID = 2
+    pkt.extend_from_slice(&tmpl_set_len.to_be_bytes());
+
+    // Template record header
+    pkt.extend_from_slice(&TEMPLATE_ID.to_be_bytes());
+    pkt.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+
+    // Field specifiers
+    for (ftype, flen) in fields {
+        pkt.extend_from_slice(&ftype.to_be_bytes());
+        pkt.extend_from_slice(&flen.to_be_bytes());
+    }
+
+    // Data Set header
+    pkt.extend_from_slice(&TEMPLATE_ID.to_be_bytes()); // set ID = 256
+    pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
+
+    // Flow records
+    for i in 0..flows {
+        let src_ip: u32 = 0x0a000001u32.wrapping_add(i as u32);
+        let dst_ip: u32 = 0x0a010101;
+        pkt.extend_from_slice(&src_ip.to_be_bytes()); // IPV4_SRC_ADDR
+        pkt.extend_from_slice(&dst_ip.to_be_bytes()); // IPV4_DST_ADDR
+        pkt.extend_from_slice(&54321u16.to_be_bytes()); // L4_SRC_PORT
+        pkt.extend_from_slice(&443u16.to_be_bytes()); // L4_DST_PORT
+        pkt.push(6u8); // PROTOCOL = TCP
+        pkt.extend_from_slice(&12u32.to_be_bytes()); // IN_PKTS
+        pkt.extend_from_slice(&5840u32.to_be_bytes()); // IN_BYTES
+        pkt.extend_from_slice(&90_000u32.to_be_bytes()); // FIRST_SWITCHED
+        pkt.extend_from_slice(&100_000u32.to_be_bytes()); // LAST_SWITCHED
+        pkt.push(0x18u8); // TCP_FLAGS
+    }
+
+    // Padding
+    pkt.extend(std::iter::repeat_n(0u8, data_padding));
+
+    pkt
 }
