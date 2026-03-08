@@ -7,7 +7,30 @@ Lightweight network flow collector written in Rust. Receives NetFlow v5 over UDP
 - Rust 1.70+ (install via [rustup](https://rustup.rs))
 - A router, switch, or traffic generator exporting NetFlow v5 to UDP port 2055
 
-## Quickstart
+## Quick start (bare metal)
+
+```bash
+cargo build --release
+./target/release/flodar
+```
+
+## Quick start (Docker)
+
+```bash
+# Build
+docker build -f docker/Dockerfile -t flodar .
+
+# Run (UDP 2055 for flows, TCP 9090 for metrics/API)
+docker run -p 2055:2055/udp -p 9090:9090 flodar
+```
+
+ARM64 (Raspberry Pi 4):
+
+```bash
+docker buildx build --platform linux/arm64 -f docker/Dockerfile -t flodar:arm64 .
+```
+
+## Quickstart (clone and run)
 
 ```bash
 # Clone and build
@@ -478,9 +501,21 @@ SharedState ◄─────────────────────�
 ```
 flodar/
  ├─ Cargo.toml                   workspace manifest
+ ├─ docker/
+ │  └─ Dockerfile                multi-stage build (debian:bookworm-slim runtime)
+ ├─ grafana/
+ │  └─ provisioning/
+ │     ├─ datasources/
+ │     │  └─ prometheus.yml      auto-configure Prometheus datasource
+ │     └─ dashboards/
+ │        ├─ dashboard.yml       dashboard provider config
+ │        └─ flodar-overview.json  main dashboard (10 panels)
  ├─ examples/
  │  └─ prometheus.yml            ready-to-use Prometheus scrape config
+ ├─ docs/
+ │  └─ metrics.md
  ├─ flodar/
+ │  ├─ flodar.toml               default configuration (also used in Docker image)
  │  └─ src/
  │     ├─ main.rs                 CLI, config loading, tracing init, task wiring
  │     ├─ collector/mod.rs        async UDP listener; broadcasts FlowRecords
@@ -508,10 +543,34 @@ flodar/
     └─ src/main.rs                normal + 4 attack simulation modes
 ```
 
-## What Flodar Does Not Do (v0.4)
+## Loki logging (optional)
+
+Build with the `loki` feature to enable log shipping to Grafana Loki:
+
+```bash
+cargo build --release --features loki
+```
+
+Then in `flodar.toml`:
+
+```toml
+[logging]
+level = "info"
+backend = "loki"
+loki_url = "http://localhost:3100"
+
+[logging.loki_labels]
+job = "flodar"
+host = "pi"
+```
+
+Stdout JSON logging remains active alongside the Loki stream. Only fixed-cardinality values belong in `loki_labels` — IPs, ports, and flow fields must never be label values.
+
+If the Loki endpoint is unreachable at startup, Flodar logs a warning and continues with stdout only.
+
+## What Flodar Does Not Do (v0.5)
 
 - No NetFlow v9, IPFIX, or sFlow support
 - No storage — logs and in-memory state only
 - No authentication or TLS on the HTTP API
-- No Grafana dashboard definitions (planned for v0.5)
 - No ML-based or statistical anomaly detection — all rules are threshold-based

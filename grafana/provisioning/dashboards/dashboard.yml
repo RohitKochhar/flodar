@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: flodar
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards

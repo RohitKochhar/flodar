@@ -1,11 +1,14 @@
 [package]
 name = "flodar"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 
 [[bin]]
 name = "flodar"
 path = "src/main.rs"
+
+[features]
+loki = ["dep:tracing-loki", "dep:url"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -19,3 +22,5 @@ anyhow = "1"
 thiserror = "1"
 axum = "0.7"
 prometheus = "0.14"
+tracing-loki = { version = "0.2", optional = true }
+url = { version = "2", optional = true }
