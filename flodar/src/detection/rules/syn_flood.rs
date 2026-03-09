@@ -79,7 +79,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &SynFloodConfig) -> Option<Aler
                 format!("unique destination IPs: {}", metrics.unique_dst_ips),
                 format!("top destination IPs: {}", top_dsts),
             ],
-            triggered_at: std::time::SystemTime::now(),
+            triggered_at: chrono::Utc::now(),
         })
     } else {
         None

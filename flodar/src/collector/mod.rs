@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::api::{FlodarMetrics, SharedState};
 use crate::decoder::flow_record::FlowRecord;
 use crate::decoder::template_cache::TemplateCache;
+use crate::storage::SharedFlowStore;
 
 pub async fn run(
     bind_addr: SocketAddr,
@@ -14,6 +15,7 @@ pub async fn run(
     prom_metrics: Arc<FlodarMetrics>,
     ipfix_addr: Option<SocketAddr>,
     accepted_versions: Vec<u16>,
+    flow_store: SharedFlowStore,
 ) -> anyhow::Result<()> {
     let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
     tracing::info!(address = %bind_addr, "collector listening");
@@ -43,6 +45,7 @@ pub async fn run(
                         &tx,
                         &shared_state,
                         &prom_metrics,
+                        &flow_store,
                     ).await;
                     continue;
                 }
@@ -56,6 +59,7 @@ pub async fn run(
                         &tx,
                         &shared_state,
                         &prom_metrics,
+                        &flow_store,
                     ).await;
                     continue;
                 }
@@ -76,11 +80,13 @@ pub async fn run(
             &tx,
             &shared_state,
             &prom_metrics,
+            &flow_store,
         )
         .await;
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_packet(
     data: &[u8],
     exporter_ip: std::net::IpAddr,
@@ -89,6 +95,7 @@ async fn handle_packet(
     tx: &tokio::sync::broadcast::Sender<FlowRecord>,
     shared_state: &SharedState,
     prom_metrics: &Arc<FlodarMetrics>,
+    flow_store: &SharedFlowStore,
 ) {
     // Version filter
     if !accepted_versions.is_empty() {
@@ -124,6 +131,17 @@ async fn handle_packet(
                     state
                         .exporter_last_seen
                         .insert(r.exporter_ip, Instant::now());
+                }
+
+                // Flow store persistence — spawned and fire-and-forget.
+                if let Some(store) = flow_store {
+                    let store = store.clone();
+                    let record = r.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = store.insert(&record).await {
+                            tracing::warn!(error = %e, "flow store insert failed");
+                        }
+                    });
                 }
 
                 let _ = tx.send(r);

@@ -16,6 +16,8 @@ pub use rules::udp_flood::UdpFloodConfig;
 
 use crate::analytics::metrics::WindowMetrics;
 use crate::api::{FlodarMetrics, SharedState};
+use crate::storage::SharedAlertStore;
+use crate::webhook::WebhookConfig;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct DetectionConfig {
@@ -58,6 +60,8 @@ pub async fn run(
     config: DetectionConfig,
     shared_state: SharedState,
     prom_metrics: Arc<FlodarMetrics>,
+    alert_store: SharedAlertStore,
+    webhook_config: Option<WebhookConfig>,
 ) {
     if !config.enabled {
         tracing::info!("detection engine disabled");
@@ -117,12 +121,33 @@ pub async fn run(
                             .with_label_values(&[&alert.rule])
                             .inc();
 
-                        let mut state = shared_state.write().await;
-                        if state.recent_alerts.len() >= 100 {
-                            state.recent_alerts.pop_front();
+                        {
+                            let mut state = shared_state.write().await;
+                            if state.recent_alerts.len() >= 100 {
+                                state.recent_alerts.pop_front();
+                            }
+                            state.recent_alerts.push_back(alert.clone());
                         }
-                        state.recent_alerts.push_back(alert.clone());
-                        drop(state);
+
+                        // Webhook delivery — spawned so it never blocks the detection loop.
+                        if let Some(ref wh_config) = webhook_config {
+                            let alert_clone = alert.clone();
+                            let wh_config = wh_config.clone();
+                            tokio::spawn(async move {
+                                crate::webhook::deliver(&alert_clone, &wh_config).await;
+                            });
+                        }
+
+                        // Alert store persistence — spawned and fire-and-forget.
+                        if let Some(ref store) = alert_store {
+                            let store = store.clone();
+                            let alert_clone = alert.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = store.insert(&alert_clone).await {
+                                    tracing::warn!(error = %e, "alert store insert failed");
+                                }
+                            });
+                        }
 
                         cooldowns.insert(key, now);
                     }

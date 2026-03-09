@@ -59,7 +59,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &DestinationHotspotConfig) -> O
                         metrics.bytes_per_sec / 1_000_000.0
                     ),
                 ],
-                triggered_at: std::time::SystemTime::now(),
+                triggered_at: chrono::Utc::now(),
             });
         }
     }

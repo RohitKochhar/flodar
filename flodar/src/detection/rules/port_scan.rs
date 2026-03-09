@@ -69,7 +69,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &PortScanConfig) -> Option<Aler
                         avg_bytes_per_flow, config.max_bytes_per_flow
                     ),
                 ],
-                triggered_at: std::time::SystemTime::now(),
+                triggered_at: chrono::Utc::now(),
             });
         }
     }

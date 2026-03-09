@@ -241,7 +241,7 @@ async fn v5_flows_are_counted() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await; // let the collector bind
@@ -268,7 +268,7 @@ async fn v9_flows_are_decoded() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -292,7 +292,7 @@ async fn ipfix_flows_are_decoded() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -319,7 +319,7 @@ async fn accepted_versions_filter_drops_unlisted() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -360,8 +360,9 @@ async fn udp_flood_detection_fires_alert() {
     };
 
     let s = state.clone();
-    let handle =
-        tokio::spawn(async move { flodar::detection::run(metrics_rx, config, s, metrics).await });
+    let handle = tokio::spawn(async move {
+        flodar::detection::run(metrics_rx, config, s, metrics, None, None).await
+    });
 
     metrics_tx.send(udp_flood_metrics()).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -395,7 +396,7 @@ async fn prometheus_metrics_increment() {
     let metrics_for_collector = metrics.clone();
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics_for_collector, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics_for_collector, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -430,7 +431,16 @@ async fn dual_socket_ipfix_port() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(main_addr, flow_tx, s, metrics, Some(ipfix_addr), vec![]).await
+        flodar::collector::run(
+            main_addr,
+            flow_tx,
+            s,
+            metrics,
+            Some(ipfix_addr),
+            vec![],
+            None,
+        )
+        .await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -458,7 +468,7 @@ async fn accepted_versions_filter_drops_ipfix() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;

@@ -15,11 +15,15 @@ enum Mode {
 }
 
 #[derive(Parser)]
-#[command(name = "flowgen", version = "0.3.0")]
+#[command(name = "flowgen", version = "0.4.0")]
 struct Args {
     /// Target address to send NetFlow v5 packets to
     #[arg(long, default_value = "127.0.0.1:2055")]
     target: String,
+
+    /// POST a synthetic alert payload to this URL and print the HTTP response, then exit
+    #[arg(long)]
+    webhook_test: Option<String>,
 
     // --- Normal mode args ---
     /// Number of flows per batch (normal mode)
@@ -69,6 +73,13 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+
+    // --webhook-test: POST a synthetic alert payload and exit.
+    if let Some(ref url) = args.webhook_test {
+        run_webhook_test(url);
+        return;
+    }
+
     let socket = UdpSocket::bind("0.0.0.0:0").expect("bind failed");
 
     match args.mode {
@@ -79,6 +90,53 @@ fn main() {
         Mode::Hotspot => run_hotspot(&socket, &args),
         Mode::NetflowV9 => run_netflow_v9(&socket, &args),
         Mode::Ipfix => run_ipfix(&socket, &args),
+    }
+}
+
+// --- Webhook test ---
+
+fn run_webhook_test(url: &str) {
+    let payload = serde_json::json!({
+        "rule": "udp_flood",
+        "severity": "High",
+        "target_ip": null,
+        "window_secs": 10,
+        "indicators": [
+            "packets/sec: 3400 (threshold: 1000)",
+            "UDP ratio: 92% of flows (threshold: 80%)",
+            "unique source IPs: 3400 (threshold: 10)"
+        ],
+        "triggered_at": chrono::Utc::now().to_rfc3339(),
+    });
+
+    println!("flowgen: posting synthetic alert to {url}");
+
+    let client = reqwest::blocking::Client::new();
+    match client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .timeout(Duration::from_secs(10))
+        .send()
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            println!("flowgen: HTTP {status}");
+            if !body.is_empty() {
+                println!("flowgen: response body: {body}");
+            }
+            if status.is_success() {
+                println!("flowgen: webhook test succeeded");
+            } else {
+                eprintln!("flowgen: webhook test failed — non-2xx status");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("flowgen: webhook test error: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
