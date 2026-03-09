@@ -42,6 +42,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &DestinationHotspotConfig) -> O
         let ratio = *top_bytes as f64 / metrics.bytes as f64;
         if ratio >= config.min_traffic_ratio {
             return Some(Alert {
+                id: None,
                 rule: "destination_hotspot".to_string(),
                 severity: Severity::Medium,
                 target_ip: Some(*top_dst),

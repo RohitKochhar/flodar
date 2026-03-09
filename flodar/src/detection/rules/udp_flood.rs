@@ -59,6 +59,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &UdpFloodConfig) -> Option<Aler
             .collect::<Vec<_>>()
             .join(", ");
         Some(Alert {
+            id: None,
             rule: "udp_flood".to_string(),
             severity: Severity::High,
             target_ip: None,

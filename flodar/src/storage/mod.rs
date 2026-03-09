@@ -24,6 +24,7 @@ pub trait FlowStore: Send + Sync {
 pub trait AlertStore: Send + Sync {
     async fn insert(&self, alert: &Alert) -> anyhow::Result<()>;
     async fn query_recent(&self, limit: usize) -> anyhow::Result<Vec<Alert>>;
+    async fn query_by_id(&self, id: i64) -> anyhow::Result<Option<Alert>>;
     async fn query_by_ip(&self, ip: std::net::Ipv4Addr, limit: usize)
         -> anyhow::Result<Vec<Alert>>;
     async fn query_by_rule(&self, rule: &str, limit: usize) -> anyhow::Result<Vec<Alert>>;

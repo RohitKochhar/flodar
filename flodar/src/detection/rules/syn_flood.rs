@@ -58,6 +58,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &SynFloodConfig) -> Option<Aler
             .collect::<Vec<_>>()
             .join(", ");
         Some(Alert {
+            id: None,
             rule: "syn_flood".to_string(),
             severity: Severity::High,
             target_ip: None,

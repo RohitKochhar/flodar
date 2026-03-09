@@ -2,6 +2,7 @@ use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Alert {
+    pub id: Option<i64>,
     pub rule: String,
     pub severity: Severity,
     pub target_ip: Option<Ipv4Addr>,

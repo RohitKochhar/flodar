@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -210,19 +210,7 @@ pub async fn alerts(
         match result {
             Ok(alerts) => {
                 let total = alerts.len();
-                let items: Vec<_> = alerts
-                    .iter()
-                    .map(|a| {
-                        serde_json::json!({
-                            "rule": a.rule,
-                            "severity": a.severity.to_string(),
-                            "target_ip": a.target_ip.map(|ip| ip.to_string()),
-                            "window_secs": a.window_secs,
-                            "indicators": a.indicators,
-                            "triggered_at": a.triggered_at.to_rfc3339(),
-                        })
-                    })
-                    .collect();
+                let items: Vec<_> = alerts.iter().map(alert_to_json).collect();
                 return Json(serde_json::json!({ "total": total, "alerts": items }))
                     .into_response();
             }
@@ -240,16 +228,7 @@ pub async fn alerts(
         .iter()
         .rev()
         .take(limit)
-        .map(|a| {
-            serde_json::json!({
-                "rule": a.rule,
-                "severity": a.severity.to_string(),
-                "target_ip": a.target_ip.map(|ip| ip.to_string()),
-                "window_secs": a.window_secs,
-                "indicators": a.indicators,
-                "triggered_at": a.triggered_at.to_rfc3339(),
-            })
-        })
+        .map(alert_to_json)
         .collect();
 
     Json(serde_json::json!({
@@ -257,6 +236,45 @@ pub async fn alerts(
         "alerts": alerts,
     }))
     .into_response()
+}
+
+fn alert_to_json(a: &crate::detection::alert::Alert) -> serde_json::Value {
+    serde_json::json!({
+        "id": a.id,
+        "rule": a.rule,
+        "severity": a.severity.to_string(),
+        "target_ip": a.target_ip.map(|ip| ip.to_string()),
+        "window_secs": a.window_secs,
+        "indicators": a.indicators,
+        "triggered_at": a.triggered_at.to_rfc3339(),
+    })
+}
+
+pub async fn alert_by_id(State(state): State<ApiState>, Path(id): Path<i64>) -> impl IntoResponse {
+    let Some(ref store) = state.alert_store else {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "alert storage is not enabled",
+                "hint": "set [storage] enabled = true in flodar.toml"
+            })),
+        )
+            .into_response();
+    };
+
+    match store.query_by_id(id).await {
+        Ok(Some(alert)) => Json(alert_to_json(&alert)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("alert {id} not found") })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]

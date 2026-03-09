@@ -35,6 +35,7 @@ pub async fn run(
             axum::routing::get(handlers::top_talkers),
         )
         .route("/api/alerts", axum::routing::get(handlers::alerts))
+        .route("/api/alerts/:id", axum::routing::get(handlers::alert_by_id))
         .route("/api/flows", axum::routing::get(handlers::flows))
         .with_state(api_state);
 

@@ -61,6 +61,7 @@ fn str_to_severity(s: &str) -> Severity {
 }
 
 fn row_to_alert(
+    id: i64,
     rule: String,
     severity: String,
     target_ip: Option<String>,
@@ -75,6 +76,7 @@ fn row_to_alert(
         .unwrap_or_else(|_| chrono::Utc::now());
 
     Ok(Alert {
+        id: Some(id),
         rule,
         severity: str_to_severity(&severity),
         target_ip,
@@ -111,8 +113,8 @@ impl AlertStore for SqliteAlertStore {
     }
 
     async fn query_recent(&self, limit: usize) -> anyhow::Result<Vec<Alert>> {
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, i64, String, String)>(
-            "SELECT rule, severity, target_ip, window_secs, indicators, triggered_at \
+        let rows = sqlx::query_as::<_, (i64, String, String, Option<String>, i64, String, String)>(
+            "SELECT id, rule, severity, target_ip, window_secs, indicators, triggered_at \
              FROM alerts \
              ORDER BY triggered_at DESC \
              LIMIT ?",
@@ -124,8 +126,9 @@ impl AlertStore for SqliteAlertStore {
 
         rows.into_iter()
             .map(
-                |(rule, severity, target_ip, window_secs, indicators, triggered_at)| {
+                |(id, rule, severity, target_ip, window_secs, indicators, triggered_at)| {
                     row_to_alert(
+                        id,
                         rule,
                         severity,
                         target_ip,
@@ -138,10 +141,37 @@ impl AlertStore for SqliteAlertStore {
             .collect()
     }
 
+    async fn query_by_id(&self, id: i64) -> anyhow::Result<Option<Alert>> {
+        let row = sqlx::query_as::<_, (i64, String, String, Option<String>, i64, String, String)>(
+            "SELECT id, rule, severity, target_ip, window_secs, indicators, triggered_at \
+             FROM alerts \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to query alert by id")?;
+
+        row.map(
+            |(id, rule, severity, target_ip, window_secs, indicators, triggered_at)| {
+                row_to_alert(
+                    id,
+                    rule,
+                    severity,
+                    target_ip,
+                    window_secs,
+                    indicators,
+                    triggered_at,
+                )
+            },
+        )
+        .transpose()
+    }
+
     async fn query_by_ip(&self, ip: Ipv4Addr, limit: usize) -> anyhow::Result<Vec<Alert>> {
         let ip_str = ip.to_string();
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, i64, String, String)>(
-            "SELECT rule, severity, target_ip, window_secs, indicators, triggered_at \
+        let rows = sqlx::query_as::<_, (i64, String, String, Option<String>, i64, String, String)>(
+            "SELECT id, rule, severity, target_ip, window_secs, indicators, triggered_at \
              FROM alerts \
              WHERE target_ip = ? \
              ORDER BY triggered_at DESC \
@@ -155,8 +185,9 @@ impl AlertStore for SqliteAlertStore {
 
         rows.into_iter()
             .map(
-                |(rule, severity, target_ip, window_secs, indicators, triggered_at)| {
+                |(id, rule, severity, target_ip, window_secs, indicators, triggered_at)| {
                     row_to_alert(
+                        id,
                         rule,
                         severity,
                         target_ip,
@@ -170,8 +201,8 @@ impl AlertStore for SqliteAlertStore {
     }
 
     async fn query_by_rule(&self, rule: &str, limit: usize) -> anyhow::Result<Vec<Alert>> {
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, i64, String, String)>(
-            "SELECT rule, severity, target_ip, window_secs, indicators, triggered_at \
+        let rows = sqlx::query_as::<_, (i64, String, String, Option<String>, i64, String, String)>(
+            "SELECT id, rule, severity, target_ip, window_secs, indicators, triggered_at \
              FROM alerts \
              WHERE rule = ? \
              ORDER BY triggered_at DESC \
@@ -185,8 +216,9 @@ impl AlertStore for SqliteAlertStore {
 
         rows.into_iter()
             .map(
-                |(rule, severity, target_ip, window_secs, indicators, triggered_at)| {
+                |(id, rule, severity, target_ip, window_secs, indicators, triggered_at)| {
                     row_to_alert(
+                        id,
                         rule,
                         severity,
                         target_ip,
@@ -207,6 +239,7 @@ mod tests {
 
     fn make_alert(rule: &str, ip: Option<Ipv4Addr>) -> Alert {
         Alert {
+            id: None,
             rule: rule.to_string(),
             severity: Severity::High,
             target_ip: ip,
