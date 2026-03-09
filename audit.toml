@@ -1,7 +1,0 @@
-[advisories]
-# RUSTSEC-2023-0071: Marvin Attack timing sidechannel in the `rsa` crate.
-# Pulled in transitively via sqlx-mysql (sqlx includes all database backends
-# in its macros crate). We only use sqlx's `sqlite` feature and never invoke
-# any MySQL code path, so the RSA key-recovery attack is not reachable.
-# No fixed version of `rsa` is available upstream as of this writing.
-ignore = ["RUSTSEC-2023-0071"]
