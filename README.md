@@ -45,6 +45,7 @@ The `grafana/` directory contains a provisioned dashboard and datasource that ar
 
 ## Documentation
 
+- [Installation guide](docs/installation.md)
 - [Configuration reference](docs/configuration.md)
 - [Metrics reference](docs/metrics.md)
 - [API reference](docs/api.md)
