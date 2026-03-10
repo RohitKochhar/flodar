@@ -1,45 +1,137 @@
-# Installation Guide
+# Installation
 
-This guide covers installing and running Flodar as a persistent systemd service on a Raspberry Pi running Raspberry Pi OS (Debian-based). The same steps apply to any arm64 or armv7 Linux host.
+Flodar ships as a single static binary with no runtime dependencies. There are two supported installation methods:
 
----
+- **[Docker](#docker)** — no build toolchain required; best for trying flodar out or running it on a server
+- **[From source](#from-source)** — build with Cargo; required for custom targets (e.g. Raspberry Pi) or when you want full control over the binary
 
-## Supported hardware
-
-| Model | Architecture | Supported |
-|---|---|---|
-| Raspberry Pi 4 / 5 | `aarch64` (arm64) | Yes |
-| Raspberry Pi 3 | `aarch64` or `armv7` | Yes |
-| Raspberry Pi 2 | `armv7` | Yes |
-| Raspberry Pi Zero / Zero W | `armv6` | Not tested |
-
-Raspberry Pi 4 with 2 GB RAM or more is the recommended minimum for production use with storage enabled.
+Both methods end with the same running binary. If you want flodar to start automatically on boot, see [Running as a service](#running-as-a-service) after completing either install.
 
 ---
 
-## Step 1 — Build the binary
+## Docker
 
-You have two options: build directly on the Pi, or cross-compile on a faster machine and copy the binary over.
-
-### Option A — Build natively on the Pi
-
-This is the simplest approach. Install Rust on the Pi and build there.
+### Build the image
 
 ```bash
-# On the Raspberry Pi
+git clone https://github.com/RohitKochhar/flodar
+cd flodar
+docker build -f docker/Dockerfile -t flodar .
+```
+
+### Run with default config
+
+```bash
+docker run -d \
+  --name flodar \
+  -p 2055:2055/udp \
+  -p 9090:9090 \
+  flodar
+```
+
+Check it started correctly:
+
+```bash
+curl http://localhost:9090/health
+```
+
+### Run with a custom config
+
+Mount your `flodar.toml` over the default one baked into the image:
+
+```bash
+docker run -d \
+  --name flodar \
+  -p 2055:2055/udp \
+  -p 9090:9090 \
+  -v /path/to/your/flodar.toml:/app/flodar.toml:ro \
+  flodar
+```
+
+See [configuration.md](configuration.md) for all available options. A fully annotated example is in [`examples/flodar.full.toml`](../examples/flodar.full.toml).
+
+### Persist storage across container restarts
+
+By default, flodar stores flow and alert data inside the container — it is lost when the container is removed. To persist it, mount a host directory over the storage paths:
+
+```bash
+mkdir -p /var/lib/flodar
+
+docker run -d \
+  --name flodar \
+  -p 2055:2055/udp \
+  -p 9090:9090 \
+  -v /path/to/your/flodar.toml:/app/flodar.toml:ro \
+  -v /var/lib/flodar:/var/lib/flodar \
+  flodar
+```
+
+And in your `flodar.toml`:
+
+```toml
+[storage]
+enabled = true
+flow_db_path  = "/var/lib/flodar/flows.duckdb"
+alert_db_path = "/var/lib/flodar/alerts.db"
+```
+
+### View logs
+
+```bash
+docker logs flodar -f
+```
+
+### Upgrade
+
+```bash
+docker stop flodar && docker rm flodar
+docker build -f docker/Dockerfile -t flodar .
+docker run -d ...   # same flags as before
+```
+
+---
+
+## From source
+
+### Prerequisites
+
+Install the Rust toolchain via [rustup](https://rustup.rs):
+
+```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
+```
 
+Rust 1.75 or later is required.
+
+### Build
+
+```bash
 git clone https://github.com/RohitKochhar/flodar
 cd flodar
 cargo build --release --package flodar
 ```
 
-The binary is at `target/release/flodar`. Native builds on a Pi 4 take roughly 5–10 minutes.
+The binary is at `target/release/flodar`. Build time is roughly 2–3 minutes on a modern laptop and 5–10 minutes on a Raspberry Pi 4.
 
-### Option B — Cross-compile from a macOS or Linux x86_64 machine
+### Run
 
-Install [`cross`](https://github.com/cross-rs/cross), which uses Docker to provide the correct cross-compilation toolchain:
+```bash
+./target/release/flodar --config flodar.toml
+```
+
+Flodar looks for `flodar.toml` in the current directory by default. Pass `--config /path/to/flodar.toml` to specify a different location.
+
+To copy the binary to a system-wide location:
+
+```bash
+sudo cp target/release/flodar /usr/local/bin/flodar
+flodar --config /etc/flodar/flodar.toml
+```
+
+### Cross-compile for Raspberry Pi
+
+If building on a macOS or Linux x86_64 machine for a Raspberry Pi, install [`cross`](https://github.com/cross-rs/cross) (requires Docker):
 
 ```bash
 cargo install cross --git https://github.com/cross-rs/cross
@@ -48,88 +140,42 @@ cargo install cross --git https://github.com/cross-rs/cross
 Then build for the appropriate target:
 
 ```bash
-# Raspberry Pi 4 / 5 (64-bit OS)
+# Raspberry Pi 4 / 5 running 64-bit OS
 cross build --release --package flodar --target aarch64-unknown-linux-gnu
 
-# Raspberry Pi 3 (32-bit OS) or Pi 2
+# Raspberry Pi 3 or 2 running 32-bit OS
 cross build --release --package flodar --target armv7-unknown-linux-gnueabihf
 ```
 
-The binary is at `target/<target>/release/flodar`. Copy it to the Pi:
+Copy the binary to the Pi and install it:
 
 ```bash
 scp target/aarch64-unknown-linux-gnu/release/flodar pi@<pi-ip>:/tmp/flodar
+ssh pi@<pi-ip> "sudo mv /tmp/flodar /usr/local/bin/flodar && sudo chmod 755 /usr/local/bin/flodar"
 ```
 
 ---
 
-## Step 2 — Install the binary
+## Running as a service
 
-On the Pi, move the binary to `/usr/local/bin` and set permissions:
+If you installed flodar from source and want it to start on boot and restart on failure, set it up as a systemd service. These steps work on any systemd-based Linux host — Raspberry Pi OS, Ubuntu, Debian, etc.
 
-```bash
-sudo mv /tmp/flodar /usr/local/bin/flodar
-sudo chown root:root /usr/local/bin/flodar
-sudo chmod 755 /usr/local/bin/flodar
-```
-
-Verify it runs:
-
-```bash
-flodar --version
-```
-
----
-
-## Step 3 — Create a dedicated user
-
-Running flodar as a dedicated unprivileged user limits the blast radius if the process is ever compromised.
+### 1. Create a dedicated user
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin flodar
 ```
 
----
-
-## Step 4 — Write the configuration file
-
-Create the config directory and a `flodar.toml`. The example below is a good starting point for a Pi acting as a persistent network monitor with storage enabled.
+### 2. Create the config directory
 
 ```bash
 sudo mkdir -p /etc/flodar
-sudo nano /etc/flodar/flodar.toml
+sudo cp /path/to/your/flodar.toml /etc/flodar/flodar.toml
+sudo chown root:flodar /etc/flodar/flodar.toml
+sudo chmod 640 /etc/flodar/flodar.toml
 ```
 
-```toml
-[collector]
-bind_address = "0.0.0.0"
-bind_port = 2055
-
-[logging]
-level = "info"
-format = "json"
-
-[analytics]
-snapshot_interval_secs = 10
-
-[detection]
-enabled = true
-cooldown_secs = 60
-
-[api]
-bind_address = "0.0.0.0"
-bind_port = 9090
-enabled = true
-
-[storage]
-enabled = true
-flow_db_path = "/var/lib/flodar/flows.duckdb"
-alert_db_path = "/var/lib/flodar/alerts.db"
-```
-
-Using `/var/lib/flodar` for storage rather than the default `~/.local/share/flodar` is recommended for a system service — it is a predictable, standard location that does not depend on a home directory.
-
-Create the storage directory and set ownership:
+### 3. Create the storage directory (if using persistent storage)
 
 ```bash
 sudo mkdir -p /var/lib/flodar
@@ -137,18 +183,16 @@ sudo chown flodar:flodar /var/lib/flodar
 sudo chmod 750 /var/lib/flodar
 ```
 
-Set ownership on the config:
+And in `/etc/flodar/flodar.toml`:
 
-```bash
-sudo chown root:flodar /etc/flodar/flodar.toml
-sudo chmod 640 /etc/flodar/flodar.toml
+```toml
+[storage]
+enabled = true
+flow_db_path  = "/var/lib/flodar/flows.duckdb"
+alert_db_path = "/var/lib/flodar/alerts.db"
 ```
 
-See [configuration.md](configuration.md) for all available options.
-
----
-
-## Step 5 — Create the systemd unit
+### 4. Write the systemd unit
 
 ```bash
 sudo nano /etc/systemd/system/flodar.service
@@ -159,7 +203,6 @@ sudo nano /etc/systemd/system/flodar.service
 Description=Flodar network flow analyzer
 Documentation=https://github.com/RohitKochhar/flodar
 After=network.target
-Wants=network.target
 
 [Service]
 Type=simple
@@ -180,68 +223,30 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-**Note on ports:** The default collector port (2055 UDP) and API port (9090 TCP) are both above 1024, so no special capabilities are needed. If you change `bind_port` to a privileged port (< 1024), add `AmbientCapabilities=CAP_NET_BIND_SERVICE` to the `[Service]` block.
+> **Note on privileged ports:** The default collector port (2055 UDP) and API port (9090 TCP) are both above 1024 and require no special privileges. If you change either to a port below 1024, add `AmbientCapabilities=CAP_NET_BIND_SERVICE` to the `[Service]` block.
 
----
-
-## Step 6 — Enable and start the service
+### 5. Enable and start
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable flodar
-sudo systemctl start flodar
+sudo systemctl enable --now flodar
 ```
 
-Check that it started cleanly:
+### 6. Open firewall ports (if using ufw)
 
 ```bash
-sudo systemctl status flodar
+sudo ufw allow 2055/udp   # NetFlow / IPFIX collector
+sudo ufw allow 9090/tcp   # HTTP API and Prometheus metrics
 ```
-
----
-
-## Step 7 — Open firewall ports
-
-If `ufw` is active on the Pi, allow the collector and API ports:
-
-```bash
-# NetFlow / IPFIX collector
-sudo ufw allow 2055/udp
-
-# HTTP API and Prometheus metrics
-sudo ufw allow 9090/tcp
-```
-
-Then point your router's NetFlow export destination at the Pi's IP on port 2055.
-
----
-
-## Viewing logs
-
-Flodar writes structured JSON logs to stdout, which systemd captures and routes to the journal.
-
-```bash
-# Live log stream
-sudo journalctl -u flodar -f
-
-# Last 100 lines
-sudo journalctl -u flodar -n 100
-
-# Since last boot
-sudo journalctl -u flodar -b
-
-# Filter by log level (requires jq)
-sudo journalctl -u flodar -f -o json | jq 'select(.PRIORITY <= "4")'
-```
-
-If you prefer plain text output during initial setup, temporarily change `format = "pretty"` in `flodar.toml` and restart the service.
 
 ---
 
 ## Verifying the installation
 
+These checks work regardless of install method:
+
 ```bash
-# Health check
+# Service status
 curl http://localhost:9090/health
 
 # Prometheus metrics
@@ -251,30 +256,39 @@ curl http://localhost:9090/metrics
 curl http://localhost:9090/api/alerts
 ```
 
----
+### Viewing logs
 
-## Updating the binary
-
+**Docker:**
 ```bash
-# Build or download new binary, then:
-sudo systemctl stop flodar
-sudo mv /tmp/flodar /usr/local/bin/flodar
-sudo chown root:root /usr/local/bin/flodar
-sudo chmod 755 /usr/local/bin/flodar
-sudo systemctl start flodar
+docker logs flodar -f
+```
+
+**systemd:**
+```bash
+# Live stream
+sudo journalctl -u flodar -f
+
+# Since last boot
+sudo journalctl -u flodar -b
 ```
 
 ---
 
 ## Uninstalling
 
+**Docker:**
 ```bash
-sudo systemctl stop flodar
-sudo systemctl disable flodar
+docker stop flodar && docker rm flodar
+docker rmi flodar
+```
+
+**From source (with systemd service):**
+```bash
+sudo systemctl stop flodar && sudo systemctl disable flodar
 sudo rm /etc/systemd/system/flodar.service
 sudo systemctl daemon-reload
 sudo rm /usr/local/bin/flodar
 sudo rm -rf /etc/flodar
-sudo rm -rf /var/lib/flodar     # removes all stored flow and alert data
+sudo rm -rf /var/lib/flodar   # deletes all stored flow and alert data
 sudo userdel flodar
 ```

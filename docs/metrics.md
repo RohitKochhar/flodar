@@ -205,7 +205,7 @@ Returns persisted flow records from the DuckDB flow store.
 
 ## Grafana
 
-The `grafana/` directory contains a provisioned datasource and dashboard JSON that are automatically loaded by the Docker Compose stack — no manual import or UI interaction is required. The dashboard covers all 10 Prometheus metric families and includes per-window traffic rate panels and alert rate panels labeled by rule.
+The `grafana/` directory contains a provisioned datasource and dashboard JSON. Configure Grafana with `--config.provisioning-path=grafana/provisioning` (or set `GF_PATHS_PROVISIONING` to that directory) to load them automatically — no manual import or UI interaction is required. The dashboard covers all 10 Prometheus metric families and includes per-window traffic rate panels and alert rate panels labeled by rule.
 
 ---
 

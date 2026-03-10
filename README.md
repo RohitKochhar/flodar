@@ -41,7 +41,7 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 ## Grafana dashboard
 
-The `grafana/` directory contains a provisioned dashboard and datasource that are automatically loaded when you run the Docker Compose stack — no manual import required. See [docs/metrics.md](docs/metrics.md) for the full metric reference.
+The `grafana/` directory contains a provisioned dashboard and datasource. Point Grafana at the `grafana/provisioning` directory to load them automatically — no manual import required. See [docs/metrics.md](docs/metrics.md) for the full metric reference.
 
 ## Documentation
 
