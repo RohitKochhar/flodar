@@ -253,11 +253,27 @@ fn default_api_bind_port() -> u16 {
 fn default_api_enabled() -> bool {
     true
 }
+fn flodar_data_dir() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("flodar")
+    } else {
+        std::path::PathBuf::from(".")
+    }
+}
 fn default_flow_db_path() -> String {
-    "flodar_flows.duckdb".to_string()
+    flodar_data_dir()
+        .join("flodar_flows.duckdb")
+        .to_string_lossy()
+        .into_owned()
 }
 fn default_alert_db_path() -> String {
-    "flodar_alerts.db".to_string()
+    flodar_data_dir()
+        .join("flodar_alerts.db")
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tokio::main]
@@ -387,6 +403,17 @@ async fn main() -> anyhow::Result<()> {
     // Initialise optional storage backends.
     let (flow_store, alert_store): (storage::SharedFlowStore, storage::SharedAlertStore) =
         if config.storage.enabled {
+            // Ensure parent directories exist so users don't have to create them manually.
+            for path_str in [&config.storage.flow_db_path, &config.storage.alert_db_path] {
+                if let Some(parent) = std::path::Path::new(path_str).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("failed to create storage directory: {}", parent.display())
+                        })?;
+                    }
+                }
+            }
+
             let fs = storage::DuckDbFlowStore::new(&config.storage.flow_db_path)
                 .context("failed to open flow store")?;
             let als = storage::SqliteAlertStore::new(&config.storage.alert_db_path)

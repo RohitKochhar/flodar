@@ -53,8 +53,8 @@ enabled = true
 
 # [storage]
 # enabled = true
-# flow_db_path = "flodar_flows.duckdb"
-# alert_db_path = "flodar_alerts.db"
+# flow_db_path = "~/.local/share/flodar/flodar_flows.duckdb"   # default
+# alert_db_path = "~/.local/share/flodar/flodar_alerts.db"     # default
 
 # [webhook]
 # enabled = true
@@ -174,8 +174,8 @@ Storage is disabled by default. Enable it to persist flow records and alerts acr
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `false` | Master switch for persistent storage. When `false`, `GET /api/alerts` reads from the in-memory ring buffer and `GET /api/flows` returns 501. |
-| `flow_db_path` | string | `"flodar_flows.duckdb"` | File path for the DuckDB flow store. The file is created automatically on first run. Use an absolute path in production. |
-| `alert_db_path` | string | `"flodar_alerts.db"` | File path for the SQLite alert store. The file and schema are created automatically on first run. Use an absolute path in production. |
+| `flow_db_path` | string | `~/.local/share/flodar/flodar_flows.duckdb` | File path for the DuckDB flow store. The directory is created automatically on first run. Override with any absolute path. |
+| `alert_db_path` | string | `~/.local/share/flodar/flodar_alerts.db` | File path for the SQLite alert store. The directory is created automatically on first run. Override with any absolute path. |
 
 ---
 
