@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -11,12 +11,15 @@ use serde::Deserialize;
 
 use super::metrics::FlodarMetrics;
 use super::state::SharedState;
+use crate::storage::{SharedAlertStore, SharedFlowStore};
 
 #[derive(Clone)]
 pub struct ApiState {
     pub shared: SharedState,
     pub registry: Arc<prometheus::Registry>,
     pub prom_metrics: Arc<FlodarMetrics>,
+    pub alert_store: SharedAlertStore,
+    pub flow_store: SharedFlowStore,
 }
 
 pub async fn health(State(state): State<ApiState>) -> impl IntoResponse {
@@ -30,7 +33,7 @@ pub async fn health(State(state): State<ApiState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "uptime_secs": uptime_secs,
-        "version": "0.4.0",
+        "version": "0.7.0",
     }))
 }
 
@@ -175,6 +178,8 @@ pub async fn top_talkers(State(state): State<ApiState>) -> Response {
 #[derive(Deserialize)]
 pub struct AlertsQuery {
     limit: Option<usize>,
+    ip: Option<String>,
+    rule: Option<String>,
 }
 
 pub async fn alerts(
@@ -182,33 +187,161 @@ pub async fn alerts(
     Query(params): Query<AlertsQuery>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(20).min(100);
-    let shared = state.shared.read().await;
 
+    // When an alert store is available, read from persistent storage.
+    if let Some(ref store) = state.alert_store {
+        let result = if let Some(ref rule) = params.rule {
+            store.query_by_rule(rule, limit).await
+        } else if let Some(ref ip_str) = params.ip {
+            match ip_str.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => store.query_by_ip(ip, limit).await,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "invalid IP address"})),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            store.query_recent(limit).await
+        };
+
+        match result {
+            Ok(alerts) => {
+                let total = alerts.len();
+                let items: Vec<_> = alerts.iter().map(alert_to_json).collect();
+                return Json(serde_json::json!({ "total": total, "alerts": items }))
+                    .into_response();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "alert store query failed, falling back to in-memory");
+            }
+        }
+    }
+
+    // Fall back to in-memory ring buffer when no store is configured.
+    let shared = state.shared.read().await;
     let total = shared.recent_alerts.len();
     let alerts: Vec<_> = shared
         .recent_alerts
         .iter()
         .rev()
         .take(limit)
-        .map(|a| {
-            serde_json::json!({
-                "rule": a.rule,
-                "severity": format!("{:?}", a.severity),
-                "target_ip": a.target_ip.map(|ip| ip.to_string()),
-                "window_secs": a.window_secs,
-                "indicators": a.indicators,
-                "triggered_at": format_system_time(a.triggered_at),
-            })
-        })
+        .map(alert_to_json)
         .collect();
 
     Json(serde_json::json!({
         "total": total,
         "alerts": alerts,
     }))
+    .into_response()
 }
 
-fn format_system_time(t: std::time::SystemTime) -> String {
+fn alert_to_json(a: &crate::detection::alert::Alert) -> serde_json::Value {
+    serde_json::json!({
+        "id": a.id,
+        "rule": a.rule,
+        "severity": a.severity.to_string(),
+        "target_ip": a.target_ip.map(|ip| ip.to_string()),
+        "window_secs": a.window_secs,
+        "indicators": a.indicators,
+        "triggered_at": a.triggered_at.to_rfc3339(),
+    })
+}
+
+pub async fn alert_by_id(State(state): State<ApiState>, Path(id): Path<i64>) -> impl IntoResponse {
+    let Some(ref store) = state.alert_store else {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "alert storage is not enabled",
+                "hint": "set [storage] enabled = true in flodar.toml"
+            })),
+        )
+            .into_response();
+    };
+
+    match store.query_by_id(id).await {
+        Ok(Some(alert)) => Json(alert_to_json(&alert)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("alert {id} not found") })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FlowsQuery {
+    start: Option<String>,
+    end: Option<String>,
+    limit: Option<usize>,
+}
+
+pub async fn flows(State(state): State<ApiState>, Query(params): Query<FlowsQuery>) -> Response {
+    let Some(ref store) = state.flow_store else {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "flow storage is not enabled",
+                "hint": "set [storage] enabled = true in flodar.toml"
+            })),
+        )
+            .into_response();
+    };
+
+    let limit = params.limit.unwrap_or(100).min(1000);
+
+    let end = match params.end {
+        Some(ref s) => parse_timestamp(s).unwrap_or_else(SystemTime::now),
+        None => SystemTime::now(),
+    };
+    let start = match params.start {
+        Some(ref s) => parse_timestamp(s).unwrap_or_else(|| end - Duration::from_secs(3600)),
+        None => end - Duration::from_secs(3600),
+    };
+
+    match store.query_range(start, end, limit).await {
+        Ok(records) => {
+            let total = records.len();
+            let flows: Vec<_> = records
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "src_ip": r.src_ip.to_string(),
+                        "dst_ip": r.dst_ip.to_string(),
+                        "src_port": r.src_port,
+                        "dst_port": r.dst_port,
+                        "protocol": r.protocol,
+                        "packets": r.packets,
+                        "bytes": r.bytes,
+                        "received_at": format_system_time(r.received_at),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({ "total": total, "flows": flows })).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn parse_timestamp(s: &str) -> Option<SystemTime> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(SystemTime::from)
+}
+
+fn format_system_time(t: SystemTime) -> String {
     match t.duration_since(UNIX_EPOCH) {
         Ok(d) => {
             let s = d.as_secs();

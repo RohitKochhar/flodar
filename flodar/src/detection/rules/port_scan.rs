@@ -52,6 +52,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &PortScanConfig) -> Option<Aler
     for (src_ip, dst_ports) in &metrics.src_dst_ports {
         if dst_ports.len() >= config.min_unique_dst_ports {
             return Some(Alert {
+                id: None,
                 rule: "port_scan".to_string(),
                 severity: Severity::Medium,
                 target_ip: Some(*src_ip),
@@ -69,7 +70,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &PortScanConfig) -> Option<Aler
                         avg_bytes_per_flow, config.max_bytes_per_flow
                     ),
                 ],
-                triggered_at: std::time::SystemTime::now(),
+                triggered_at: chrono::Utc::now(),
             });
         }
     }

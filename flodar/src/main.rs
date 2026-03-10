@@ -1,4 +1,4 @@
-use flodar::{analytics, api, collector, decoder, detection};
+use flodar::{analytics, api, collector, decoder, detection, storage, webhook};
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.6.0")]
+#[command(name = "flodar", version = "0.7.0")]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -37,6 +37,9 @@ struct Config {
     detection: detection::DetectionConfig,
     #[serde(default)]
     api: ApiConfig,
+    #[serde(default)]
+    storage: StorageConfig,
+    webhook: Option<webhook::WebhookConfig>,
 }
 
 impl Config {
@@ -110,6 +113,16 @@ struct ApiConfig {
     enabled: bool,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct StorageConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_flow_db_path")]
+    flow_db_path: String,
+    #[serde(default = "default_alert_db_path")]
+    alert_db_path: String,
+}
+
 impl Default for CollectorConfig {
     fn default() -> Self {
         Self {
@@ -153,29 +166,29 @@ impl Default for ApiConfig {
 fn default_bind_address() -> String {
     "0.0.0.0".to_string()
 }
-
 fn default_bind_port() -> u16 {
     2055
 }
-
 fn default_log_level() -> String {
     "info".to_string()
 }
-
 fn default_snapshot_interval_secs() -> u64 {
     10
 }
-
 fn default_api_bind_address() -> String {
     "0.0.0.0".to_string()
 }
-
 fn default_api_bind_port() -> u16 {
     9090
 }
-
 fn default_api_enabled() -> bool {
     true
+}
+fn default_flow_db_path() -> String {
+    "flodar_flows.duckdb".to_string()
+}
+fn default_alert_db_path() -> String {
+    "flodar_alerts.db".to_string()
 }
 
 #[tokio::main]
@@ -202,8 +215,6 @@ async fn main() -> anyhow::Result<()> {
     {
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-        // Try to build the Loki layer when backend = "loki".
-        // Returns None (and logs a warning) on any init failure; caller falls back to stdout-only.
         let loki_init = if config.logging.backend.as_deref() == Some("loki") {
             let url_str = config
                 .logging
@@ -299,6 +310,25 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Initialise optional storage backends.
+    let (flow_store, alert_store): (storage::SharedFlowStore, storage::SharedAlertStore) =
+        if config.storage.enabled {
+            let fs = storage::DuckDbFlowStore::new(&config.storage.flow_db_path)
+                .context("failed to open flow store")?;
+            let als = storage::SqliteAlertStore::new(&config.storage.alert_db_path)
+                .await
+                .context("failed to open alert store")?;
+            (
+                Some(Arc::new(fs) as Arc<dyn storage::FlowStore>),
+                Some(Arc::new(als) as Arc<dyn storage::AlertStore>),
+            )
+        } else {
+            (None, None)
+        };
+
+    // Resolve webhook config (only when enabled).
+    let webhook_config = config.webhook.filter(|w| w.enabled);
+
     let shared_state: api::SharedState =
         Arc::new(tokio::sync::RwLock::new(api::AppState::default()));
 
@@ -316,10 +346,10 @@ async fn main() -> anyhow::Result<()> {
     let api_enabled = config.api.enabled;
     let api_shared_state = shared_state.clone();
     let api_prom_metrics = prom_metrics.clone();
+    let api_alert_store = alert_store.clone();
+    let api_flow_store = flow_store.clone();
     let accepted_versions = config.collector.accepted_versions.clone();
 
-    // select! drops all other branches when any one completes, so a signal or
-    // a fatal subsystem error causes immediate shutdown of the whole process.
     tokio::select! {
         r = collector::run(
             bind_addr,
@@ -328,6 +358,7 @@ async fn main() -> anyhow::Result<()> {
             prom_metrics.clone(),
             ipfix_addr,
             accepted_versions,
+            flow_store,
         ) => r?,
 
         () = analytics::run(
@@ -342,11 +373,21 @@ async fn main() -> anyhow::Result<()> {
             config.detection,
             shared_state.clone(),
             prom_metrics.clone(),
+            alert_store,
+            webhook_config,
         ) => {},
 
         r = async move {
             if api_enabled {
-                api::run(api_addr, api_shared_state, prometheus_registry, api_prom_metrics).await
+                api::run(
+                    api_addr,
+                    api_shared_state,
+                    prometheus_registry,
+                    api_prom_metrics,
+                    api_alert_store,
+                    api_flow_store,
+                )
+                .await
             } else {
                 tracing::info!("HTTP API disabled");
                 Ok(())

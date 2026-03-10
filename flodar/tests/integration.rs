@@ -11,6 +11,10 @@
 //!   - Version filter tests (v9 + IPFIX)          — exercise accepted_versions gate
 //!   - Detection test                             — exercise detection engine in isolation
 //!   - SIGTERM test (Unix only)                   — exercise graceful shutdown
+//!   - Webhook delivery test                      — exercise detection → HTTP POST path
+//!   - Alert store test                           — exercise detection → SQLite persistence
+//!   - Flow store test                            — exercise collector → DuckDB persistence
+//!   - API storage-disabled test                  — exercise GET /api/flows 501 path
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -241,7 +245,7 @@ async fn v5_flows_are_counted() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await; // let the collector bind
@@ -268,7 +272,7 @@ async fn v9_flows_are_decoded() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -292,7 +296,7 @@ async fn ipfix_flows_are_decoded() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -319,7 +323,7 @@ async fn accepted_versions_filter_drops_unlisted() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -360,8 +364,9 @@ async fn udp_flood_detection_fires_alert() {
     };
 
     let s = state.clone();
-    let handle =
-        tokio::spawn(async move { flodar::detection::run(metrics_rx, config, s, metrics).await });
+    let handle = tokio::spawn(async move {
+        flodar::detection::run(metrics_rx, config, s, metrics, None, None).await
+    });
 
     metrics_tx.send(udp_flood_metrics()).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -395,7 +400,7 @@ async fn prometheus_metrics_increment() {
     let metrics_for_collector = metrics.clone();
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics_for_collector, None, vec![]).await
+        flodar::collector::run(addr, flow_tx, s, metrics_for_collector, None, vec![], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -430,7 +435,16 @@ async fn dual_socket_ipfix_port() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(main_addr, flow_tx, s, metrics, Some(ipfix_addr), vec![]).await
+        flodar::collector::run(
+            main_addr,
+            flow_tx,
+            s,
+            metrics,
+            Some(ipfix_addr),
+            vec![],
+            None,
+        )
+        .await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -458,7 +472,7 @@ async fn accepted_versions_filter_drops_ipfix() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5]).await
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![5], None).await
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -543,5 +557,220 @@ async fn sigterm_exits_cleanly() {
         status.success(),
         "expected exit code 0 after SIGTERM, got {:?}",
         status
+    );
+}
+
+// ── v0.7: webhook / storage / API tests ────────────────────────────────────────
+
+/// Helper — returns a DetectionConfig with all thresholds set very low so the
+/// `udp_flood_metrics()` snapshot triggers an alert immediately.
+fn low_threshold_detection_config() -> DetectionConfig {
+    DetectionConfig {
+        enabled: true,
+        cooldown_secs: 0,
+        udp_flood: UdpFloodConfig {
+            enabled: true,
+            min_packets_per_sec: 1.0,
+            min_udp_ratio: 0.5,
+            min_unique_sources: 1,
+        },
+        ..DetectionConfig::default()
+    }
+}
+
+/// Webhook delivery: when a detection alert fires and a webhook config is
+/// present, the detection engine POSTs the full alert JSON to the configured
+/// URL.  Verified by spinning up a real axum HTTP server that captures the
+/// request body.
+#[tokio::test]
+async fn webhook_delivered_on_alert() {
+    use axum::extract::State;
+    use axum::http::StatusCode;
+
+    // Shared slot that the webhook server writes into when a POST arrives.
+    let captured: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+    let captured_for_handler = captured.clone();
+
+    let hook_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let webhook_addr = hook_listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route(
+                "/hook",
+                axum::routing::post(
+                    |State(cap): State<Arc<tokio::sync::Mutex<Option<String>>>>,
+                     body: axum::body::Bytes| async move {
+                        *cap.lock().await = Some(String::from_utf8_lossy(&body).to_string());
+                        StatusCode::OK
+                    },
+                ),
+            )
+            .with_state(captured_for_handler);
+        axum::serve(hook_listener, app).await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (state, metrics) = make_infra();
+    let (metrics_tx, metrics_rx) = tokio::sync::broadcast::channel(16);
+
+    let webhook_config = flodar::webhook::WebhookConfig {
+        enabled: true,
+        url: format!("http://{webhook_addr}/hook"),
+        timeout_secs: 5,
+        retry_attempts: 0,
+    };
+
+    let s = state.clone();
+    tokio::spawn(async move {
+        flodar::detection::run(
+            metrics_rx,
+            low_threshold_detection_config(),
+            s,
+            metrics,
+            None,
+            Some(webhook_config),
+        )
+        .await;
+    });
+
+    metrics_tx.send(udp_flood_metrics()).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let body = captured.lock().await.clone();
+    assert!(body.is_some(), "no webhook POST was received within 500 ms");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&body.unwrap()).expect("webhook body is not valid JSON");
+    assert_eq!(json["rule"], "udp_flood");
+    assert_eq!(json["severity"], "High");
+    assert!(
+        json["triggered_at"].as_str().is_some(),
+        "triggered_at missing from webhook payload"
+    );
+    assert!(
+        json["indicators"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
+        "indicators missing or empty in webhook payload"
+    );
+}
+
+/// Alert store persistence: when a detection alert fires with an alert store
+/// configured, the alert is written to SQLite and can be retrieved via
+/// `query_recent`.
+#[tokio::test]
+async fn alert_store_persists_fired_alert() {
+    use flodar::storage::{AlertStore, SqliteAlertStore};
+
+    let store = Arc::new(SqliteAlertStore::new(":memory:").await.unwrap());
+    let store_for_detection: flodar::storage::SharedAlertStore =
+        Some(store.clone() as Arc<dyn AlertStore>);
+
+    let (state, metrics) = make_infra();
+    let (metrics_tx, metrics_rx) = tokio::sync::broadcast::channel(16);
+
+    let s = state.clone();
+    tokio::spawn(async move {
+        flodar::detection::run(
+            metrics_rx,
+            low_threshold_detection_config(),
+            s,
+            metrics,
+            store_for_detection,
+            None,
+        )
+        .await;
+    });
+
+    metrics_tx.send(udp_flood_metrics()).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let alerts = store.query_recent(10).await.unwrap();
+    assert_eq!(
+        alerts.len(),
+        1,
+        "expected exactly one alert persisted in SQLite"
+    );
+    assert_eq!(alerts[0].rule, "udp_flood");
+}
+
+/// Flow store persistence: flows received by the collector with a flow store
+/// configured are written to DuckDB and retrievable via `query_range`.
+#[tokio::test]
+async fn flow_store_persists_received_flows() {
+    use flodar::storage::{DuckDbFlowStore, FlowStore};
+    use std::time::SystemTime;
+
+    let store = Arc::new(DuckDbFlowStore::new(":memory:").unwrap());
+    let store_for_collector: flodar::storage::SharedFlowStore =
+        Some(store.clone() as Arc<dyn FlowStore>);
+
+    let addr = ephemeral_addr().await;
+    let (state, metrics) = make_infra();
+    let (flow_tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    let s = state.clone();
+    let handle = tokio::spawn(async move {
+        flodar::collector::run(addr, flow_tx, s, metrics, None, vec![], store_for_collector).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    sender.send_to(&nf5_packet(3), addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    handle.abort();
+
+    let start = SystemTime::UNIX_EPOCH;
+    let end = SystemTime::now() + Duration::from_secs(1);
+    let flows = store.query_range(start, end, 100).await.unwrap();
+    assert_eq!(flows.len(), 3, "expected 3 flows persisted in DuckDB");
+}
+
+/// API flows endpoint: when the flow store is not configured, `GET /api/flows`
+/// returns HTTP 501 with a JSON body containing `error` and `hint` fields.
+#[tokio::test]
+async fn api_flows_returns_501_without_storage() {
+    let api_addr = ephemeral_addr().await;
+    let (state, prom_metrics) = make_infra();
+    let registry = prometheus::Registry::new();
+
+    tokio::spawn(async move {
+        flodar::api::run(api_addr, state, registry, prom_metrics, None, None)
+            .await
+            .unwrap();
+    });
+
+    // Poll until the API is accepting connections.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if tokio::net::TcpStream::connect(api_addr).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("API did not become ready within 3 s");
+
+    let resp = reqwest::get(format!("http://{api_addr}/api/flows"))
+        .await
+        .expect("GET /api/flows failed");
+
+    assert_eq!(
+        resp.status(),
+        501,
+        "expected 501 Not Implemented when flow storage is disabled"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().is_some(),
+        "expected 'error' field in 501 response body"
+    );
+    assert!(
+        body["hint"].as_str().is_some(),
+        "expected 'hint' field in 501 response body"
     );
 }

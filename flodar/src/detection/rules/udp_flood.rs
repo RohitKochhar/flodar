@@ -59,6 +59,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &UdpFloodConfig) -> Option<Aler
             .collect::<Vec<_>>()
             .join(", ");
         Some(Alert {
+            id: None,
             rule: "udp_flood".to_string(),
             severity: Severity::High,
             target_ip: None,
@@ -80,7 +81,7 @@ pub fn evaluate(metrics: &WindowMetrics, config: &UdpFloodConfig) -> Option<Aler
                 format!("unique destination IPs: {}", metrics.unique_dst_ips),
                 format!("top destination IPs: {}", top_dsts),
             ],
-            triggered_at: std::time::SystemTime::now(),
+            triggered_at: chrono::Utc::now(),
         })
     } else {
         None

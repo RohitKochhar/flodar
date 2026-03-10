@@ -8,16 +8,22 @@ use handlers::ApiState;
 pub use metrics::FlodarMetrics;
 pub use state::{AppState, SharedState};
 
+use crate::storage::{SharedAlertStore, SharedFlowStore};
+
 pub async fn run(
     bind_addr: std::net::SocketAddr,
     state: SharedState,
     registry: prometheus::Registry,
     prom_metrics: Arc<FlodarMetrics>,
+    alert_store: SharedAlertStore,
+    flow_store: SharedFlowStore,
 ) -> anyhow::Result<()> {
     let api_state = ApiState {
         shared: state,
         registry: Arc::new(registry),
         prom_metrics,
+        alert_store,
+        flow_store,
     };
 
     let app = axum::Router::new()
@@ -29,6 +35,8 @@ pub async fn run(
             axum::routing::get(handlers::top_talkers),
         )
         .route("/api/alerts", axum::routing::get(handlers::alerts))
+        .route("/api/alerts/:id", axum::routing::get(handlers::alert_by_id))
+        .route("/api/flows", axum::routing::get(handlers::flows))
         .with_state(api_state);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

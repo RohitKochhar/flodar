@@ -9,6 +9,8 @@ Flodar has two layers of tests, both run automatically by CI on every pull reque
 | Unit tests | `cargo test --workspace --lib --bins` | Individual functions and modules in isolation |
 | Integration tests | `cargo test --test integration --package flodar` | Full async pipeline end-to-end |
 
+**Total: 60 tests** (47 unit + 13 integration)
+
 ---
 
 ## Unit Tests (`flodar/src/**`)
@@ -72,6 +74,26 @@ Run them with `cargo test --workspace --lib --bins`.
 | `destination_hotspot::alert_reports_target_ip` | Fired alert identifies the destination IP that received concentrated traffic |
 | `destination_hotspot::alert_has_at_least_two_indicators` | Fired alert contains at least two indicator strings |
 
+### Storage
+
+Unit tests for the SQLite alert store and DuckDB flow store live inside their respective modules (`storage/alert_store.rs` and `storage/flow_store.rs`) and exercise the store implementations directly with in-memory databases.
+
+#### Alert store (`storage::alert_store`)
+
+| Test | What it checks |
+|------|---------------|
+| `alert_store::insert_and_query_recent` | An inserted alert is returned by `query_recent` |
+| `alert_store::query_by_rule_filters` | `query_by_rule("udp_flood")` returns only matching alerts; a `syn_flood` alert inserted alongside is excluded |
+| `alert_store::query_by_ip_filters` | `query_by_ip(target)` returns only alerts whose `target_ip` matches; an alert for a different IP is excluded |
+| `alert_store::query_recent_respects_limit` | When more alerts exist than the requested limit, only `limit` rows are returned |
+
+#### Flow store (`storage::flow_store`)
+
+| Test | What it checks |
+|------|---------------|
+| `flow_store::insert_and_query_range` | Flows inserted at specific timestamps are returned by `query_range` when the time window includes them, and excluded when the window is narrower |
+| `flow_store::query_range_respects_limit` | When more flows exist than the requested limit, only `limit` rows are returned |
+
 ---
 
 ## Integration Tests (`flodar/tests/integration.rs`)
@@ -123,6 +145,30 @@ arrives at the collector, is decoded, and increments the shared flow counter.
 | Test | What it checks |
 |------|---------------|
 | `sigterm_exits_cleanly` *(Unix only)* | The compiled `flodar` binary starts, becomes reachable on its HTTP API port, exits with code 0 within 5 s of receiving SIGTERM |
+
+### Webhook Delivery
+
+| Test | What it checks |
+|------|---------------|
+| `webhook_delivered_on_alert` | When a detection alert fires with a webhook config present, an HTTP POST is made to the configured URL. A real axum server captures the request body and the test asserts the payload is valid JSON containing `rule`, `severity`, `triggered_at`, and a non-empty `indicators` array |
+
+### Alert Store Persistence
+
+| Test | What it checks |
+|------|---------------|
+| `alert_store_persists_fired_alert` | When a detection alert fires with an in-memory SQLite alert store wired in, the alert is written asynchronously to the store and is retrievable via `query_recent` |
+
+### Flow Store Persistence
+
+| Test | What it checks |
+|------|---------------|
+| `flow_store_persists_received_flows` | When the collector receives a v5 packet containing three records with an in-memory DuckDB flow store wired in, all three flow records are asynchronously written to the store and retrievable via `query_range` |
+
+### API Storage Behaviour
+
+| Test | What it checks |
+|------|---------------|
+| `api_flows_returns_501_without_storage` | When the HTTP API is started with `flow_store: None`, `GET /api/flows` returns HTTP 501 with a JSON body containing both an `error` and a `hint` field |
 
 ---
 
