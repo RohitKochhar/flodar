@@ -23,7 +23,13 @@ fn default_retry_attempts() -> u32 {
 
 pub async fn deliver(alert: &Alert, config: &WebhookConfig) {
     let client = reqwest::Client::new();
-    let payload = serde_json::to_string(alert).expect("alert serialization failed");
+    let payload = match serde_json::to_string(alert) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, rule = %alert.rule, "failed to serialize alert for webhook delivery");
+            return;
+        }
+    };
 
     for attempt in 0..=config.retry_attempts {
         let result = client
