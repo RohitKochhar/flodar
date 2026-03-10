@@ -15,6 +15,14 @@ enum Mode {
     /// Distributed SYN carpet bombing: many source IPs, many destinations,
     /// low packets per destination. Generates IPFIX flows.
     CarpetBomb,
+    /// Benign high-fanout: broad-destination traffic with high TCP completion rate.
+    HighFanout,
+    /// Like CarpetBomb but a configurable fraction of flows are completed (PSH+ACK).
+    PartialCompletion,
+    /// Like CarpetBomb but spread over a longer duration (slow rate).
+    SlowBurn,
+    /// Benign network scanner: SYN probes to many destinations with ~90% completion rate.
+    SynScan,
 }
 
 #[derive(Parser)]
@@ -85,6 +93,10 @@ struct Args {
     /// Number of unique destination IPs to spread traffic across (carpet-bomb mode)
     #[arg(long, default_value_t = 3000)]
     unique_dsts: u32,
+
+    /// Fraction of flows that are completed sessions (0.0–1.0) for partial-completion mode
+    #[arg(long, default_value_t = 0.0)]
+    completion_ratio: f64,
 }
 
 fn main() {
@@ -107,6 +119,10 @@ fn main() {
         Mode::NetflowV9 => run_netflow_v9(&socket, &args),
         Mode::Ipfix => run_ipfix(&socket, &args),
         Mode::CarpetBomb => run_carpet_bomb(&socket, &args),
+        Mode::HighFanout => run_high_fanout(&socket, &args),
+        Mode::PartialCompletion => run_partial_completion(&socket, &args),
+        Mode::SlowBurn => run_slow_burn(&socket, &args),
+        Mode::SynScan => run_syn_scan(&socket, &args),
     }
 }
 
@@ -157,31 +173,50 @@ fn run_webhook_test(url: &str) {
     }
 }
 
-// --- Normal mode (unchanged behavior) ---
+// --- Normal mode ---
+// Generates ordinary completed TCP session flows via IPFIX.
+// Flows are PSH+ACK (established data transfer), representing benign client/server traffic.
 
 fn run_normal(socket: &UdpSocket, args: &Args) {
-    const MAX_PER_PACKET: u16 = 30;
+    // A small pool of typical server destinations.
+    let destinations: [u32; 4] = [
+        0xc0a80101, // 192.168.1.1
+        0x08080808, // 8.8.8.8
+        0x01010101, // 1.1.1.1
+        0x0a010101, // 10.1.1.1
+    ];
+    let dst_ports: [u16; 3] = [443, 80, 22];
+    let count = (args.flows as u32).min(30);
+    let mut sequence: u32 = 1;
+    let mut template_sent = false;
     let mut total_sent = 0u64;
 
     for iteration in 0..args.repeat {
-        let mut remaining = args.flows;
-        let mut sequence: u32 = iteration * (args.flows as u32 / MAX_PER_PACKET as u32 + 1) + 1;
+        let flows: Vec<CarpetBombFlow> = (0..count)
+            .map(|i| CarpetBombFlow {
+                src_ip: 0x0a000005u32.wrapping_add(i),
+                dst_ip: destinations[i as usize % destinations.len()],
+                src_port: 50000 + i as u16,
+                dst_port: dst_ports[i as usize % dst_ports.len()],
+                packets: 12,
+                bytes: 5840,
+                duration_ms: 10_000,
+                tcp_flags: 0x18, // PSH+ACK — completed session
+                start_secs: now_secs(),
+            })
+            .collect();
 
-        while remaining > 0 {
-            let count = remaining.min(MAX_PER_PACKET);
-            let offset = args.flows - remaining;
-            let packet = build_packet(count, sequence, offset, FlowParams::default());
-            socket.send_to(&packet, &args.target).expect("send failed");
-            remaining -= count;
-            sequence += 1;
-        }
+        let pkt = build_ipfix_carpet_bomb_packet(&flows, sequence, !template_sent);
+        socket.send_to(&pkt, &args.target).expect("send failed");
+        template_sent = true;
+        total_sent += flows.len() as u64;
+        sequence = sequence.wrapping_add(1);
 
-        total_sent += args.flows as u64;
         println!(
-            "flowgen: [{}/{}] sent {} flow(s) to {}",
+            "flowgen: [{}/{}] sent {} flow(s) to {} (IPFIX)",
             iteration + 1,
             args.repeat,
-            args.flows,
+            flows.len(),
             args.target
         );
 
@@ -239,41 +274,43 @@ fn run_udp_flood(socket: &UdpSocket, args: &Args) {
 }
 
 // --- SYN flood ---
-// Generates high-rate TCP SYN-only flows with very short durations.
+// Generates high-rate TCP SYN-only flows concentrated on a single destination.
+// This is a classical volumetric SYN flood, distinct from carpet bombing:
+// one target, many sources, no destination diversity.
 
 fn run_syn_flood(socket: &UdpSocket, args: &Args) {
     let batch_interval = Duration::from_millis(100);
-    let flows_per_batch = (args.pps / 10).max(1) as u16;
+    let flows_per_batch = (args.pps / 10).max(1) as u32;
     let total_batches = args.duration_secs * 10;
     let mut sequence: u32 = 1;
+    let mut template_sent = false;
+    let mut rng = Rng::new();
 
     println!(
-        "flowgen: syn-flood — {} flows/batch at 10 Hz for {}s → ~{} pps",
+        "flowgen: syn-flood — {} flows/batch at 10 Hz for {}s → ~{} pps to 192.0.2.1 (IPFIX)",
         flows_per_batch, args.duration_secs, args.pps
     );
 
     for batch in 0..total_batches {
-        let offset = ((batch * flows_per_batch as u64) & 0xffff) as u16;
-        let params = FlowParams {
-            protocol: 6,     // TCP
-            tcp_flags: 0x02, // SYN only (no ACK)
-            packets: 1,
-            bytes: 40,
-            start_uptime: 0,
-            end_uptime: 50, // 50ms duration — well below 500ms threshold
-            src_ip_base: 0x0a000001,
-            src_ip_vary: true,
-            dst_ip: 0xc0000201, // 192.0.2.1
-            dst_port: 80,
-        };
-        send_flows(
-            socket,
-            &args.target,
-            flows_per_batch,
-            sequence,
-            offset,
-            params,
-        );
+        let flows: Vec<CarpetBombFlow> = (0..flows_per_batch)
+            .map(|i| CarpetBombFlow {
+                // Rotate source IPs across 10.0.0.0/8 to simulate spoofed sources.
+                src_ip: 0x0a000001u32
+                    .wrapping_add((batch as u32 * flows_per_batch + i) & 0x00ff_ffff),
+                dst_ip: 0xc0000201, // 192.0.2.1 — single target
+                src_port: 1024 + (rng.next_u32() % 64511) as u16,
+                dst_port: 80,
+                packets: 1,
+                bytes: 40,
+                duration_ms: 50,
+                tcp_flags: 0x02, // SYN only
+                start_secs: now_secs(),
+            })
+            .collect();
+
+        let pkt = build_ipfix_carpet_bomb_packet(&flows, sequence, !template_sent);
+        socket.send_to(&pkt, &args.target).expect("send failed");
+        template_sent = true;
         sequence = sequence.wrapping_add(1);
         std::thread::sleep(batch_interval);
     }
@@ -501,6 +538,7 @@ fn run_carpet_bomb(socket: &UdpSocket, args: &Args) {
                     bytes,
                     duration_ms,
                     tcp_flags,
+                    start_secs: now_secs(),
                 }
             })
             .collect();
@@ -528,6 +566,13 @@ fn run_carpet_bomb(socket: &UdpSocket, args: &Args) {
     );
 }
 
+fn now_secs() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as u32
+}
+
 /// One IPFIX flow record for the carpet bomb simulation.
 struct CarpetBombFlow {
     src_ip: u32,
@@ -536,9 +581,11 @@ struct CarpetBombFlow {
     dst_port: u16,
     packets: u32,
     bytes: u32,
-    /// Flow duration in ms — used to set LAST_SWITCHED relative to FIRST_SWITCHED.
+    /// Flow duration in ms.
     duration_ms: u32,
     tcp_flags: u8,
+    /// Per-flow start time as Unix seconds (IE 150 flowStartSeconds).
+    start_secs: u32,
 }
 
 /// TCP flags for carpet bomb flows.
@@ -573,16 +620,16 @@ fn build_ipfix_carpet_bomb_packet(
 
     // Field layout — must match the order records are encoded below.
     let fields: &[(u16, u16)] = &[
-        (8, 4),  // IPV4_SRC_ADDR
-        (12, 4), // IPV4_DST_ADDR
-        (7, 2),  // L4_SRC_PORT
-        (11, 2), // L4_DST_PORT
-        (4, 1),  // PROTOCOL
-        (2, 4),  // IN_PKTS
-        (1, 4),  // IN_BYTES
-        (22, 4), // FIRST_SWITCHED
-        (21, 4), // LAST_SWITCHED
-        (6, 1),  // TCP_FLAGS
+        (8, 4),   // IPV4_SRC_ADDR
+        (12, 4),  // IPV4_DST_ADDR
+        (7, 2),   // L4_SRC_PORT
+        (11, 2),  // L4_DST_PORT
+        (4, 1),   // PROTOCOL
+        (2, 4),   // IN_PKTS
+        (1, 4),   // IN_BYTES
+        (150, 4), // flowStartSeconds (IANA IE 150)
+        (151, 4), // flowEndSeconds   (IANA IE 151)
+        (6, 1),   // TCP_FLAGS
     ];
     let record_len: usize = fields.iter().map(|(_, l)| *l as usize).sum(); // 30 bytes
 
@@ -604,10 +651,16 @@ fn build_ipfix_carpet_bomb_packet(
 
     let mut pkt = Vec::with_capacity(total_len);
 
+    // Current Unix time for export_time — used by flumen as fallback timestamp.
+    let export_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as u32;
+
     // IPFIX message header (16 bytes).
     pkt.extend_from_slice(&10u16.to_be_bytes()); // version = 10
     pkt.extend_from_slice(&(total_len as u16).to_be_bytes());
-    pkt.extend_from_slice(&0u32.to_be_bytes()); // export_time (wall clock not available in flowgen)
+    pkt.extend_from_slice(&export_time.to_be_bytes()); // export_time = current Unix time
     pkt.extend_from_slice(&sequence.to_be_bytes());
     pkt.extend_from_slice(&0u32.to_be_bytes()); // observation_domain_id
 
@@ -627,11 +680,12 @@ fn build_ipfix_carpet_bomb_packet(
     pkt.extend_from_slice(&TEMPLATE_ID.to_be_bytes()); // set ID = template ID
     pkt.extend_from_slice(&(data_set_len as u16).to_be_bytes());
 
-    // SYN flows have very short durations: LAST_SWITCHED = FIRST_SWITCHED + duration_ms.
-    // Use a fixed FIRST_SWITCHED base (router uptime in ms) so the consumer can parse them.
-    const FIRST_SWITCHED_BASE: u32 = 100_000;
-
+    // Each flow carries its own flowStartSeconds (IE 150) so flows generated
+    // in different batches get distinct timestamps, exercising the sliding window.
     for flow in flows {
+        let flow_start_secs = flow.start_secs;
+        let flow_end_secs = flow.start_secs.saturating_add(flow.duration_ms / 1000);
+
         pkt.extend_from_slice(&flow.src_ip.to_be_bytes()); // IPV4_SRC_ADDR
         pkt.extend_from_slice(&flow.dst_ip.to_be_bytes()); // IPV4_DST_ADDR
         pkt.extend_from_slice(&flow.src_port.to_be_bytes()); // L4_SRC_PORT
@@ -639,8 +693,8 @@ fn build_ipfix_carpet_bomb_packet(
         pkt.push(6u8); // PROTOCOL = TCP
         pkt.extend_from_slice(&flow.packets.to_be_bytes()); // IN_PKTS
         pkt.extend_from_slice(&flow.bytes.to_be_bytes()); // IN_BYTES
-        pkt.extend_from_slice(&FIRST_SWITCHED_BASE.to_be_bytes()); // FIRST_SWITCHED
-        pkt.extend_from_slice(&(FIRST_SWITCHED_BASE + flow.duration_ms).to_be_bytes()); // LAST_SWITCHED
+        pkt.extend_from_slice(&flow_start_secs.to_be_bytes()); // flowStartSeconds (IE 150)
+        pkt.extend_from_slice(&flow_end_secs.to_be_bytes()); // flowEndSeconds   (IE 151)
         pkt.push(flow.tcp_flags); // TCP_FLAGS
     }
 
@@ -981,4 +1035,276 @@ fn build_ipfix_packet(flows: usize) -> Vec<u8> {
     pkt.extend(std::iter::repeat_n(0u8, data_padding));
 
     pkt
+}
+
+// --- HighFanout mode ---
+//
+// Benign broad-destination traffic with high TCP session completion rate.
+// All flows are PSH+ACK or FIN+ACK (completed sessions), no pure SYN packets.
+// Uses IPFIX format with IE 150/151 (flowStartSeconds/flowEndSeconds).
+
+fn run_high_fanout(socket: &UdpSocket, args: &Args) {
+    let (src_base, src_host_count) = parse_cidr(&args.src_subnet);
+    let unique_dsts = args.unique_dsts.max(1);
+    let duration_secs = args.duration_secs.max(1);
+
+    let mut rng = Rng::new();
+
+    // Pre-generate destination pool.
+    let dst_pool: Vec<u32> = (0..unique_dsts)
+        .map(|_| 0x0a000001u32.wrapping_add(rng.next_u32() % 16_777_213))
+        .collect();
+
+    const COMMON_PORTS: [u16; 8] = [80, 443, 22, 8080, 8443, 3306, 5432, 6379];
+
+    // ~20 flows per batch at 10 Hz.
+    let batch_interval = Duration::from_millis(100);
+    let total_batches = duration_secs * 10;
+    let flows_per_batch: u16 = 20;
+
+    println!(
+        "flowgen: high-fanout — subnet={} unique-dsts={} duration={}s (completed sessions only)",
+        args.src_subnet, unique_dsts, duration_secs
+    );
+
+    let mut total_sent: u64 = 0;
+    let mut sequence: u32 = 1;
+    let mut template_sent = false;
+
+    for _ in 0..total_batches {
+        let flows: Vec<CarpetBombFlow> = (0..flows_per_batch)
+            .map(|_| {
+                let src_ip = src_base.wrapping_add(rng.next_u32() % src_host_count);
+                let dst_ip = dst_pool[rng.next_u32() as usize % dst_pool.len()];
+                let dst_port = COMMON_PORTS[rng.next_u32() as usize % COMMON_PORTS.len()];
+                let src_port = 1024 + (rng.next_u32() % 64511) as u16;
+                let packets = 8 + rng.next_u32() % 13; // 8–20 packets (normal session)
+                let bytes = packets * (500 + rng.next_u32() % 1500);
+                let duration_ms = 500 + rng.next_u32() % 9500; // 500ms–10s sessions
+                                                               // 90% PSH+ACK, 10% FIN+ACK — all completed sessions, no SYN
+                let tcp_flags = if rng.next_u32().is_multiple_of(10) {
+                    0x11u8
+                } else {
+                    0x18u8
+                };
+                CarpetBombFlow {
+                    src_ip,
+                    dst_ip,
+                    src_port,
+                    dst_port,
+                    packets,
+                    bytes,
+                    duration_ms,
+                    tcp_flags,
+                    start_secs: now_secs(),
+                }
+            })
+            .collect();
+
+        let pkt = build_ipfix_carpet_bomb_packet(&flows, sequence, !template_sent);
+        socket.send_to(&pkt, &args.target).expect("send failed");
+        template_sent = true;
+        total_sent += flows_per_batch as u64;
+        sequence = sequence.wrapping_add(1);
+
+        std::thread::sleep(batch_interval);
+    }
+
+    println!(
+        "flowgen: high-fanout done — {} flows sent across {} unique destinations",
+        total_sent, unique_dsts
+    );
+}
+
+// --- PartialCompletion mode ---
+//
+// Like CarpetBomb but with a configurable fraction of completed flows.
+// For each SYN flow, with probability `completion_ratio`, also emit a PSH+ACK
+// flow from the same src/dst pair (simulating a completed handshake).
+
+fn run_partial_completion(socket: &UdpSocket, args: &Args) {
+    let (src_base, src_host_count) = parse_cidr(&args.src_subnet);
+    let unique_dsts = args.unique_dsts.max(1);
+    let duration_secs = args.duration_secs.max(1);
+    let total_syns = args.total_syns.max(1);
+    let completion_ratio = args.completion_ratio.clamp(0.0, 1.0);
+
+    let mut rng = Rng::new();
+
+    let dst_pool: Vec<u32> = (0..unique_dsts)
+        .map(|_| 0x0a000001u32.wrapping_add(rng.next_u32() % 16_777_213))
+        .collect();
+
+    const COMMON_PORTS: [u16; 12] = [80, 443, 22, 8080, 21, 25, 53, 3389, 8443, 8000, 5900, 23];
+
+    let batch_interval = Duration::from_millis(100);
+    let total_batches = duration_secs * 10;
+    let flows_per_batch = ((total_syns / total_batches) as u16).max(1);
+
+    println!(
+        "flowgen: partial-completion — subnet={} unique-dsts={} total-syns={} completion={:.2} duration={}s",
+        args.src_subnet, unique_dsts, total_syns, completion_ratio, duration_secs
+    );
+
+    let mut total_sent: u64 = 0;
+    let mut sequence: u32 = 1;
+    let mut template_sent = false;
+
+    // Threshold for completion: if rng % 1000 < threshold, emit a completion flow.
+    let completion_threshold = (completion_ratio * 1000.0) as u32;
+
+    for _ in 0..total_batches {
+        let mut batch_flows: Vec<CarpetBombFlow> = Vec::new();
+
+        for _ in 0..flows_per_batch {
+            let src_ip = src_base.wrapping_add(rng.next_u32() % src_host_count);
+            let dst_ip = dst_pool[rng.next_u32() as usize % dst_pool.len()];
+            let dst_port = COMMON_PORTS[rng.next_u32() as usize % COMMON_PORTS.len()];
+            let src_port = 1024 + (rng.next_u32() % 64511) as u16;
+            let packets = 1 + rng.next_u32() % 5;
+            let bytes = packets * (40 + rng.next_u32() % 20);
+            let duration_ms = 1 + rng.next_u32() % 50;
+            let tcp_flags = carpet_tcp_flags(&mut rng);
+
+            batch_flows.push(CarpetBombFlow {
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                packets,
+                bytes,
+                duration_ms,
+                tcp_flags,
+                start_secs: now_secs(),
+            });
+
+            // With probability completion_ratio, also emit a PSH+ACK from same pair.
+            if completion_threshold > 0 && rng.next_u32() % 1000 < completion_threshold {
+                batch_flows.push(CarpetBombFlow {
+                    src_ip,
+                    dst_ip,
+                    src_port,
+                    dst_port,
+                    packets: 8 + rng.next_u32() % 5,
+                    bytes: 5000 + rng.next_u32() % 5000,
+                    duration_ms: 100 + rng.next_u32() % 900,
+                    tcp_flags: 0x18, // PSH+ACK
+                    start_secs: now_secs(),
+                });
+            }
+        }
+
+        let pkt = build_ipfix_carpet_bomb_packet(&batch_flows, sequence, !template_sent);
+        socket.send_to(&pkt, &args.target).expect("send failed");
+        template_sent = true;
+        total_sent += batch_flows.len() as u64;
+        sequence = sequence.wrapping_add(1);
+
+        std::thread::sleep(batch_interval);
+    }
+
+    println!(
+        "flowgen: partial-completion done — {} flows sent (completion_ratio={:.2})",
+        total_sent, completion_ratio
+    );
+}
+
+// --- SlowBurn mode ---
+//
+// Same as CarpetBomb but rate is spread over a longer duration.
+// Defaults to higher duration, same total SYN count = fewer flows per second.
+
+fn run_slow_burn(socket: &UdpSocket, args: &Args) {
+    println!(
+        "flowgen: slow-burn — subnet={} unique-dsts={} total-syns={} duration={}s",
+        args.src_subnet, args.unique_dsts, args.total_syns, args.duration_secs
+    );
+    // Reuse carpet bomb logic — slow-burn is just carpet bomb with a longer duration
+    // (caller passes --duration-secs 90 or higher to exercise window eviction).
+    run_carpet_bomb(socket, args);
+    println!("flowgen: slow-burn done");
+}
+
+// --- SynScan mode ---
+//
+// Simulates a legitimate network scanner: SYN probes to many destination IPs,
+// with ~90% of attempts resulting in a completed TCP session (PSH+ACK follow-up).
+// The high completion ratio means this should NOT trigger the carpet bombing detector
+// (threshold_B = 0.05), demonstrating the detector's false-positive resistance.
+
+fn run_syn_scan(socket: &UdpSocket, args: &Args) {
+    let unique_dsts = args.unique_dsts.max(1);
+    let duration_secs = args.duration_secs.max(1);
+    let total_syns = args.total_syns.max(1);
+
+    let mut rng = Rng::new();
+
+    // Fixed scanner source IP — one host performing the scan.
+    let scanner_ip: u32 = 0x0a640001; // 10.100.0.1
+
+    let dst_pool: Vec<u32> = (0..unique_dsts)
+        .map(|_| 0x0a000001u32.wrapping_add(rng.next_u32() % 16_777_213))
+        .collect();
+
+    let batch_interval = Duration::from_millis(100);
+    let total_batches = duration_secs * 10;
+    let syns_per_batch = ((total_syns / total_batches) as u16).max(1);
+
+    println!(
+        "flowgen: syn-scan — scanner=10.100.0.1 unique-dsts={} total-syns={} completion~90% duration={}s (IPFIX)",
+        unique_dsts, total_syns, duration_secs
+    );
+
+    let mut total_sent: u64 = 0;
+    let mut sequence: u32 = 1;
+    let mut template_sent = false;
+
+    for _ in 0..total_batches {
+        let mut batch_flows: Vec<CarpetBombFlow> = Vec::new();
+
+        for _ in 0..syns_per_batch {
+            let dst_ip = dst_pool[rng.next_u32() as usize % dst_pool.len()];
+            let src_port = 1024 + (rng.next_u32() % 64511) as u16;
+
+            // SYN probe to the target.
+            batch_flows.push(CarpetBombFlow {
+                src_ip: scanner_ip,
+                dst_ip,
+                src_port,
+                dst_port: 443,
+                packets: 1,
+                bytes: 40,
+                duration_ms: 10,
+                tcp_flags: 0x02, // SYN
+                start_secs: now_secs(),
+            });
+
+            // ~90% completion: emit a PSH+ACK data flow to simulate a successful session.
+            if !rng.next_u32().is_multiple_of(10) {
+                batch_flows.push(CarpetBombFlow {
+                    src_ip: scanner_ip,
+                    dst_ip,
+                    src_port,
+                    dst_port: 443,
+                    packets: 6 + rng.next_u32() % 10,
+                    bytes: 2000 + rng.next_u32() % 8000,
+                    duration_ms: 200 + rng.next_u32() % 800,
+                    tcp_flags: 0x18, // PSH+ACK
+                    start_secs: now_secs(),
+                });
+            }
+        }
+
+        total_sent += batch_flows.len() as u64;
+        let pkt = build_ipfix_carpet_bomb_packet(&batch_flows, sequence, !template_sent);
+        socket.send_to(&pkt, &args.target).expect("send failed");
+        template_sent = true;
+        sequence = sequence.wrapping_add(1);
+        std::thread::sleep(batch_interval);
+    }
+
+    println!(
+        "flowgen: syn-scan done — {} flows sent (~90% completion rate)",
+        total_sent
+    );
 }
