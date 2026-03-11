@@ -135,11 +135,6 @@ The binary is at `target/release/flodar`. Build time is roughly 2–3 minutes on
 
 Flodar looks for `flodar.toml` in the current directory by default. Pass `--config /path/to/flodar.toml` to specify a different location.
 
-> **Note:** If you have `[storage] enabled = true` in your config, the parent directory for `flow_db_path` and `alert_db_path` must exist before starting flodar — it will not be created automatically. For example:
-> ```bash
-> mkdir -p /var/lib/flodar
-> ```
-
 To copy the binary to a system-wide location:
 
 ```bash
