@@ -1,22 +1,21 @@
 # Installation
 
-Flodar ships as a single static binary with no runtime dependencies. There are two supported installation methods:
+Flodar ships as a single static binary with no runtime dependencies. There are three supported installation methods:
 
-- **[Docker](#docker)** — no build toolchain required; best for trying flodar out or running it on a server
+- **[Docker (pre-built)](#docker)** — pull from GHCR; no build toolchain required; fastest way to get started
+- **[Docker (build locally)](#build-the-image-locally)** — build the image yourself from source
 - **[From source](#from-source)** — build with Cargo; required for custom targets (e.g. Raspberry Pi) or when you want full control over the binary
 
-Both methods end with the same running binary. If you want flodar to start automatically on boot, see [Running as a service](#running-as-a-service) after completing either install.
+All methods end with the same running binary. If you want flodar to start automatically on boot, see [Running as a service](#running-as-a-service) after completing either install.
 
 ---
 
 ## Docker
 
-### Build the image
+Every merge to `main` publishes a multi-arch image (`linux/amd64`, `linux/arm64`) to the GitHub Container Registry. Pull it directly — no clone or build required:
 
 ```bash
-git clone https://github.com/RohitKochhar/flodar
-cd flodar
-docker build -f docker/Dockerfile -t flodar .
+docker pull ghcr.io/rohitkochhar/flodar:latest
 ```
 
 ### Run with default config
@@ -26,7 +25,7 @@ docker run -d \
   --name flodar \
   -p 2055:2055/udp \
   -p 9090:9090 \
-  flodar
+  ghcr.io/rohitkochhar/flodar:latest
 ```
 
 Check it started correctly:
@@ -45,7 +44,7 @@ docker run -d \
   -p 2055:2055/udp \
   -p 9090:9090 \
   -v /path/to/your/flodar.toml:/app/flodar.toml:ro \
-  flodar
+  ghcr.io/rohitkochhar/flodar:latest
 ```
 
 See [configuration.md](configuration.md) for all available options. A fully annotated example is in [`examples/flodar.full.toml`](../examples/flodar.full.toml).
@@ -63,7 +62,7 @@ docker run -d \
   -p 9090:9090 \
   -v /path/to/your/flodar.toml:/app/flodar.toml:ro \
   -v /var/lib/flodar:/var/lib/flodar \
-  flodar
+  ghcr.io/rohitkochhar/flodar:latest
 ```
 
 And in your `flodar.toml`:
@@ -85,9 +84,21 @@ docker logs flodar -f
 
 ```bash
 docker stop flodar && docker rm flodar
-docker build -f docker/Dockerfile -t flodar .
+docker pull ghcr.io/rohitkochhar/flodar:latest
 docker run -d ...   # same flags as before
 ```
+
+### Build the image locally
+
+If you need to build the image yourself (e.g. to test local changes):
+
+```bash
+git clone https://github.com/RohitKochhar/flodar
+cd flodar
+docker build -f docker/Dockerfile -t flodar .
+```
+
+Then use `flodar` in place of `ghcr.io/rohitkochhar/flodar:latest` in the run commands above.
 
 ---
 
@@ -113,6 +124,8 @@ cargo build --release --package flodar
 ```
 
 The binary is at `target/release/flodar`. Build time is roughly 2–3 minutes on a modern laptop and 5–10 minutes on a Raspberry Pi 4.
+
+> **Note:** flodar bundles DuckDB and compiles it from C++ source during the first build. This is expected — DuckDB is a large embedded database engine and can add 10–15 minutes to the initial build time on a modern laptop (longer on a Raspberry Pi). Subsequent builds are fast because Cargo caches the compiled artifact.
 
 ### Run
 
@@ -279,7 +292,7 @@ sudo journalctl -u flodar -b
 **Docker:**
 ```bash
 docker stop flodar && docker rm flodar
-docker rmi flodar
+docker rmi ghcr.io/rohitkochhar/flodar:latest
 ```
 
 **From source (with systemd service):**
