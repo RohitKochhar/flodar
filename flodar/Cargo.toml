@@ -1,6 +1,6 @@
 [package]
 name = "flodar"
-version = "0.7.0"
+version = "1.0.0-beta"
 edition = "2021"
 
 [lib]
@@ -26,9 +26,9 @@ anyhow = "1"
 thiserror = "1"
 axum = "0.7"
 prometheus = "0.14"
-tracing-loki = { version = "0.2", optional = true }
+tracing-loki = { version = "0.2", optional = true, default-features = false, features = ["compat-0-2-1", "rustls"] }
 url = { version = "2", optional = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"
 duckdb = { version = "1", features = ["bundled"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }

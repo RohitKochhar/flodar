@@ -15,6 +15,11 @@ impl SqliteAlertStore {
         let url = if path == ":memory:" {
             "sqlite::memory:".to_string()
         } else {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .context("failed to create alert store directory")?;
+            }
             format!("sqlite://{path}?mode=rwc")
         };
 

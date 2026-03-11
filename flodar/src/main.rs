@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[command(name = "flodar", version = "0.7.0")]
+#[command(name = "flodar", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Path to configuration file
     #[arg(long, short)]
@@ -50,12 +50,19 @@ impl Config {
         );
         anyhow::ensure!(
             self.collector.bind_port != 0,
-            "collector.bind_port must be non-zero"
+            "collector.bind_port must be in range 1–65535"
         );
-        anyhow::ensure!(self.api.bind_port != 0, "api.bind_port must be non-zero");
+        anyhow::ensure!(
+            self.api.bind_port != 0,
+            "api.bind_port must be in range 1–65535"
+        );
         anyhow::ensure!(
             self.analytics.snapshot_interval_secs > 0,
             "analytics.snapshot_interval_secs must be > 0"
+        );
+        anyhow::ensure!(
+            self.detection.cooldown_secs > 0,
+            "detection.cooldown_secs must be > 0 (use a large value like 3600 to effectively disable cooldown)"
         );
         for &v in &self.collector.accepted_versions {
             anyhow::ensure!(
@@ -63,6 +70,68 @@ impl Config {
                 "accepted_versions contains unsupported version {v} (must be 5, 9, or 10)"
             );
         }
+
+        // Webhook: if enabled, url must be a valid HTTP/HTTPS URL.
+        if let Some(wh) = &self.webhook {
+            if wh.enabled {
+                anyhow::ensure!(
+                    !wh.url.is_empty(),
+                    "webhook.url is required when webhook.enabled = true\n  \
+                     Set a valid HTTP or HTTPS URL, e.g.:\n    \
+                     [webhook]\n    \
+                     url = \"https://hooks.slack.com/services/...\""
+                );
+                anyhow::ensure!(
+                    wh.url.starts_with("http://") || wh.url.starts_with("https://"),
+                    "webhook.url must start with http:// or https://, got: {}\n  \
+                     e.g.: url = \"https://hooks.slack.com/services/...\"",
+                    wh.url
+                );
+            }
+        }
+
+        // Storage: if enabled, both paths must be non-empty.
+        if self.storage.enabled {
+            anyhow::ensure!(
+                !self.storage.flow_db_path.is_empty(),
+                "storage.flow_db_path must not be empty when storage.enabled = true"
+            );
+            anyhow::ensure!(
+                !self.storage.alert_db_path.is_empty(),
+                "storage.alert_db_path must not be empty when storage.enabled = true"
+            );
+        }
+
+        // Detection thresholds must be non-negative.
+        anyhow::ensure!(
+            self.detection.udp_flood.min_packets_per_sec >= 0.0,
+            "detection.udp_flood.min_packets_per_sec must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.udp_flood.min_udp_ratio >= 0.0,
+            "detection.udp_flood.min_udp_ratio must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.syn_flood.min_packets_per_sec >= 0.0,
+            "detection.syn_flood.min_packets_per_sec must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.syn_flood.min_syn_ratio >= 0.0,
+            "detection.syn_flood.min_syn_ratio must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.destination_hotspot.min_traffic_ratio >= 0.0,
+            "detection.destination_hotspot.min_traffic_ratio must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.destination_hotspot.min_bytes_per_sec >= 0.0,
+            "detection.destination_hotspot.min_bytes_per_sec must be >= 0"
+        );
+        anyhow::ensure!(
+            self.detection.port_scan.max_bytes_per_flow >= 0.0,
+            "detection.port_scan.max_bytes_per_flow must be >= 0"
+        );
+
         Ok(())
     }
 }
@@ -184,11 +253,27 @@ fn default_api_bind_port() -> u16 {
 fn default_api_enabled() -> bool {
     true
 }
+fn flodar_data_dir() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("flodar")
+    } else {
+        std::path::PathBuf::from(".")
+    }
+}
 fn default_flow_db_path() -> String {
-    "flodar_flows.duckdb".to_string()
+    flodar_data_dir()
+        .join("flodar_flows.duckdb")
+        .to_string_lossy()
+        .into_owned()
 }
 fn default_alert_db_path() -> String {
-    "flodar_alerts.db".to_string()
+    flodar_data_dir()
+        .join("flodar_alerts.db")
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tokio::main]
@@ -204,7 +289,12 @@ async fn main() -> anyhow::Result<()> {
         Config::default()
     };
 
-    config.validate()?;
+    // Validate before binding any sockets. Errors are printed to stderr directly
+    // because the logging layer is not yet initialized at this point.
+    if let Err(e) = config.validate() {
+        eprintln!("Error: invalid configuration\n  {e}");
+        std::process::exit(1);
+    }
 
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| config.logging.level.clone());
 
@@ -313,6 +403,17 @@ async fn main() -> anyhow::Result<()> {
     // Initialise optional storage backends.
     let (flow_store, alert_store): (storage::SharedFlowStore, storage::SharedAlertStore) =
         if config.storage.enabled {
+            // Ensure parent directories exist so users don't have to create them manually.
+            for path_str in [&config.storage.flow_db_path, &config.storage.alert_db_path] {
+                if let Some(parent) = std::path::Path::new(path_str).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("failed to create storage directory: {}", parent.display())
+                        })?;
+                    }
+                }
+            }
+
             let fs = storage::DuckDbFlowStore::new(&config.storage.flow_db_path)
                 .context("failed to open flow store")?;
             let als = storage::SqliteAlertStore::new(&config.storage.alert_db_path)
@@ -327,7 +428,10 @@ async fn main() -> anyhow::Result<()> {
         };
 
     // Resolve webhook config (only when enabled).
-    let webhook_config = config.webhook.filter(|w| w.enabled);
+    let webhook_config = config.webhook.clone().filter(|w| w.enabled);
+
+    // Print startup summary so the user can immediately confirm their config was read correctly.
+    print_startup_banner(&config, &webhook_config, cli.log_format);
 
     let shared_state: api::SharedState =
         Arc::new(tokio::sync::RwLock::new(api::AppState::default()));
@@ -349,6 +453,7 @@ async fn main() -> anyhow::Result<()> {
     let api_alert_store = alert_store.clone();
     let api_flow_store = flow_store.clone();
     let accepted_versions = config.collector.accepted_versions.clone();
+    let pretty_alerts = matches!(cli.log_format, LogFormat::Pretty);
 
     tokio::select! {
         r = collector::run(
@@ -375,6 +480,7 @@ async fn main() -> anyhow::Result<()> {
             prom_metrics.clone(),
             alert_store,
             webhook_config,
+            pretty_alerts,
         ) => {},
 
         r = async move {
@@ -411,10 +517,52 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| anyhow::anyhow!("ctrl-c handler: {e}"))?;
             }
-            tracing::info!("shutting down");
+            tracing::info!(reason = "signal", "flodar shutting down");
+            // Allow in-flight storage writes up to 2 seconds to complete before the
+            // runtime drops. Writes are fire-and-forget tasks; this sleep gives them
+            // time to flush without blocking indefinitely.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             Ok::<(), anyhow::Error>(())
         } => r?,
     }
 
     Ok(())
+}
+
+/// Print a concise startup summary at INFO level so the user can immediately
+/// confirm that their configuration file was read correctly.
+fn print_startup_banner(
+    config: &Config,
+    webhook_config: &Option<webhook::WebhookConfig>,
+    log_format: LogFormat,
+) {
+    let storage_str = if config.storage.enabled {
+        format!(
+            "enabled (flows: {}, alerts: {})",
+            config.storage.flow_db_path, config.storage.alert_db_path
+        )
+    } else {
+        "disabled".to_string()
+    };
+
+    let webhook_str = if let Some(wh) = webhook_config {
+        format!("enabled ({})", wh.url)
+    } else {
+        "disabled".to_string()
+    };
+
+    let log_fmt_str = match log_format {
+        LogFormat::Json => "json",
+        LogFormat::Pretty => "pretty",
+    };
+
+    tracing::info!(
+        version     = env!("CARGO_PKG_VERSION"),
+        collector   = %format!("{}:{} (NetFlow v5/v9, IPFIX)", config.collector.bind_address, config.collector.bind_port),
+        api         = %format!("{}:{}", config.api.bind_address, config.api.bind_port),
+        storage     = %storage_str,
+        webhook     = %webhook_str,
+        log_format  = %log_fmt_str,
+        "flodar starting"
+    );
 }

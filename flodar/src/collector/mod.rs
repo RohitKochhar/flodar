@@ -1,4 +1,3 @@
-// TODO(v1.0): no unwrap() in production paths
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;

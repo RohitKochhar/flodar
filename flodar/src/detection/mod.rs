@@ -62,6 +62,7 @@ pub async fn run(
     prom_metrics: Arc<FlodarMetrics>,
     alert_store: SharedAlertStore,
     webhook_config: Option<WebhookConfig>,
+    pretty_alerts: bool,
 ) {
     if !config.enabled {
         tracing::info!("detection engine disabled");
@@ -115,7 +116,7 @@ pub async fn run(
                         .unwrap_or(false);
 
                     if !suppressed {
-                        log_alert(&alert);
+                        log_alert(&alert, pretty_alerts);
                         prom_metrics
                             .alerts_total
                             .with_label_values(&[&alert.rule])

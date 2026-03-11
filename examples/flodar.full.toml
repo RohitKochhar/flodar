@@ -1,0 +1,103 @@
+# flodar.full.toml — annotated example covering all v0.7 configuration options.
+# Copy to flodar.toml (or pass with --config) and adjust to your environment.
+
+# ---------------------------------------------------------------------------
+# Collector — UDP listener for NetFlow v5/v9 and IPFIX (RFC 7011)
+# ---------------------------------------------------------------------------
+[collector]
+bind_address = "0.0.0.0"
+bind_port    = 2055          # NetFlow v5 / v9 port
+
+# Optional: listen on a separate port for IPFIX (RFC 7011).
+# Remove or comment out to share bind_port for all protocol versions.
+bind_port_ipfix = 4739
+
+# Restrict which protocol versions are accepted.
+# Omit (or leave empty) to accept all supported versions: 5, 9, 10.
+accepted_versions = [5, 9, 10]
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+[logging]
+level = "info"   # trace | debug | info | warn | error
+
+# Optional Loki backend (requires building with --features loki).
+# backend   = "loki"
+# loki_url  = "http://localhost:3100"
+# [logging.loki_labels]
+# app = "flodar"
+# env = "production"
+
+# ---------------------------------------------------------------------------
+# Analytics — sliding-window metrics engine
+# ---------------------------------------------------------------------------
+[analytics]
+snapshot_interval_secs = 10   # how often window metrics are published
+
+# ---------------------------------------------------------------------------
+# HTTP API
+# ---------------------------------------------------------------------------
+[api]
+bind_address = "0.0.0.0"
+bind_port    = 9090
+enabled      = true
+
+# Endpoints:
+#   GET /api/alerts?limit=N&rule=<rule>&ip=<ip>
+#   GET /api/flows?start=<RFC3339>&end=<RFC3339>&limit=N  (requires storage)
+#   GET /metrics   (Prometheus)
+#   GET /healthz
+
+# ---------------------------------------------------------------------------
+# Detection engine
+# ---------------------------------------------------------------------------
+[detection]
+enabled      = true
+cooldown_secs = 60   # minimum seconds between repeated alerts for the same rule
+
+[detection.udp_flood]
+enabled              = true
+min_packets_per_sec  = 1000.0
+min_udp_ratio        = 0.80    # fraction of traffic that must be UDP
+min_unique_sources   = 10      # minimum distinct source IPs
+
+[detection.syn_flood]
+enabled                  = true
+min_packets_per_sec      = 500.0
+min_syn_ratio            = 0.70    # fraction of TCP that must be SYN-only
+max_avg_flow_duration_ms = 500     # flows shorter than this look like SYN floods
+
+[detection.port_scan]
+enabled             = true
+min_unique_dst_ports = 50     # distinct destination ports within the window
+max_bytes_per_flow   = 100.0  # scanners typically send tiny payloads
+
+[detection.destination_hotspot]
+enabled           = false      # disabled by default; enable for traffic-concentration alerts
+min_traffic_ratio = 0.80       # single destination absorbs ≥80 % of bytes
+min_bytes_per_sec = 100.0
+
+# ---------------------------------------------------------------------------
+# Storage — persistent flow and alert backends (v0.7+)
+# ---------------------------------------------------------------------------
+[storage]
+enabled       = true
+flow_db_path  = "flodar_flows.duckdb"   # DuckDB file for raw flow records
+alert_db_path = "flodar_alerts.db"      # SQLite file for triggered alerts
+
+# When enabled = false (default), flow history and alert persistence are
+# disabled and GET /api/flows returns HTTP 501.
+
+# ---------------------------------------------------------------------------
+# Webhook — push alerts to an HTTP endpoint on detection (v0.7+)
+# ---------------------------------------------------------------------------
+[webhook]
+enabled         = true
+url             = "https://your-endpoint.example.com/flodar-alerts"
+timeout_secs    = 5    # per-attempt HTTP timeout
+retry_attempts  = 1    # additional attempts after the first failure (0 = no retries)
+
+# Alerts are delivered as JSON POST requests with Content-Type: application/json.
+# Payload matches the Alert schema returned by GET /api/alerts.
+# Remove this section (or set enabled = false) to disable webhook delivery.

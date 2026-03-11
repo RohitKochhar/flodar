@@ -13,6 +13,11 @@ pub struct DuckDbFlowStore {
 
 impl DuckDbFlowStore {
     pub fn new(path: &str) -> anyhow::Result<Self> {
+        if path != ":memory:" {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::fs::create_dir_all(parent).context("failed to create flow store directory")?;
+            }
+        }
         let conn = duckdb::Connection::open(path).context("failed to open DuckDB flow store")?;
 
         conn.execute_batch(

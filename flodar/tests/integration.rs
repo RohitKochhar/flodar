@@ -365,7 +365,7 @@ async fn udp_flood_detection_fires_alert() {
 
     let s = state.clone();
     let handle = tokio::spawn(async move {
-        flodar::detection::run(metrics_rx, config, s, metrics, None, None).await
+        flodar::detection::run(metrics_rx, config, s, metrics, None, None, false).await
     });
 
     metrics_tx.send(udp_flood_metrics()).unwrap();
@@ -631,6 +631,7 @@ async fn webhook_delivered_on_alert() {
             metrics,
             None,
             Some(webhook_config),
+            false,
         )
         .await;
     });
@@ -681,6 +682,7 @@ async fn alert_store_persists_fired_alert() {
             metrics,
             store_for_detection,
             None,
+            false,
         )
         .await;
     });
