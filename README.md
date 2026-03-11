@@ -3,15 +3,12 @@
 
 # Flodar
 
-There's a gap in open-source network telemetry. Enterprise platforms require Kafka and ClickHouse. Simple collectors forward raw packets and leave analysis to you. Flodar sits in between — a single binary that ingests NetFlow v5/v9 and IPFIX from your router, computes sliding-window traffic analytics, detects common attack patterns, and exposes everything to Prometheus and Grafana. Local flow and alert history in DuckDB and SQLite. Webhook delivery for real-time notifications. Runs on a Raspberry Pi 4.
+There's a gap in open-source network telemetry. Enterprise platforms require Kafka and ClickHouse. Simple collectors forward raw packets and leave analysis to you. Flodar sits in between — a single binary that ingests NetFlow v5/v9 and IPFIX from your router, computes sliding-window traffic analytics, detects common attack patterns, and exposes everything to Prometheus and Grafana. Local flow and alert history in DuckDB and SQLite. Webhook delivery for real-time notifications. Runs on the hardware you have.
 
 ## Quick start — Docker
 
 ```bash
-git clone https://github.com/RohitKochhar/flodar
-cd flodar
-docker build -t flodar .
-docker run -p 2055:2055/udp -p 9090:9090 flodar
+docker run -p 2055:2055/udp -p 9090:9090 ghcr.io/rohitkochhar/flodar:latest
 ```
 
 Then open http://localhost:9090/health and http://localhost:9090/metrics.
