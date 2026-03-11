@@ -299,8 +299,8 @@
     },
     {
       "id": 8,
-      "title": "Alerts by Rule",
-      "type": "bargauge",
+      "title": "Detections by Rule",
+      "type": "piechart",
       "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
@@ -314,22 +314,18 @@
       ],
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "valueMode": "color",
-        "showUnfilled": true
+        "pieType": "pie",
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value", "percent"]
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
       },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 10 }
-            ]
-          },
           "unit": "short"
         },
         "overrides": []

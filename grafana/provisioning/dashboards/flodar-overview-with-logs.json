@@ -433,7 +433,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${loki}" },
-          "expr": "{service_name=\\"flodar\\"}",
+          "expr": "{service_name=\"flodar\"}",
           "refId": "A"
         }
       ],
@@ -457,7 +457,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${loki}" },
-          "expr": "{service_name=\\"flodar\\"} | json | level =~ \"error|warn\"",
+          "expr": "{service_name=\"flodar\"} | json | level =~ \"error|warn\"",
           "refId": "A"
         }
       ],
@@ -481,7 +481,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${loki}" },
-          "expr": "{service_name=\\"flodar\\"} | json | message =~ \"(?i)alert\"",
+          "expr": "{service_name=\"flodar\"} | json | message =~ \"(?i)alert\"",
           "refId": "A"
         }
       ],
@@ -505,7 +505,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${loki}" },
-          "expr": "sum by (level) (rate({service_name=\\"flodar\\"} | json [1m]))",
+          "expr": "sum by (level) (rate({service_name=\"flodar\"} | json [1m]))",
           "legendFormat": "{{level}}",
           "refId": "A"
         }
