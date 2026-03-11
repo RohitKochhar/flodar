@@ -1,5 +1,6 @@
 # Stage 1: build
 FROM rust:slim AS builder
+RUN apt-get update && apt-get install -y g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 RUN cargo build --release -p flodar
