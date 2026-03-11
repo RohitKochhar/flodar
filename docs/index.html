@@ -1,63 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><script data-hosted-proxy="url-rewriter">
-(function() {
-  // Target proxy URL - all matching requests will be rewritten to this base
-  var PROXY_BASE = "https://0tdfan9jqg-8181.hosted.obvious.ai";
+<head>
+  <link rel="icon" type="image/svg+xml" href="https://app.obvious.ai/favicon.svg">
+  <!-- Open Graph meta tags (injected by Obvious) -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Flodar">
+  <meta property="og:description" content="Built with Obvious">
+  <meta property="og:image" content="https://api.app.obvious.ai/prepare/og/folio/pub_art_zrGnSf1a">
+  <meta property="og:url" content="https://folio.obvious.ai/art_KupL3fFm">
+  <meta property="og:site_name" content="Obvious">
   
-  // Regex to match E2B sandbox URLs: https://PORT-sandboxid.e2b.app or .e2b.dev
-  var E2B_URL_PATTERN = /https?:\/\/(\d+)-[a-z0-9]+\.e2b\.(app|dev)/gi;
+  <!-- Twitter Card meta tags -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Flodar">
+  <meta name="twitter:description" content="Built with Obvious">
+  <meta name="twitter:image" content="https://api.app.obvious.ai/prepare/og/folio/pub_art_zrGnSf1a">
   
-  // Regex to match localhost URLs: http://localhost:PORT or http://127.0.0.1:PORT
-  var LOCALHOST_URL_PATTERN = /https?:\/\/(localhost|127\.0\.0\.1):(\d+)/gi;
+  <!-- Canonical URL -->
+  <link rel="canonical" href="https://folio.obvious.ai/art_KupL3fFm">
 
-  /**
-   * Rewrite a URL if it matches our patterns and port.
-   * Only rewrites URLs that match port 8181 to avoid breaking other services.
-   */
-  function rewriteUrl(url) {
-    if (typeof url !== "string") return url;
-    
-    // Extract port from URL to check if it matches our target port
-    var portMatch = url.match(/:(\d+)/);
-    if (portMatch && parseInt(portMatch[1]) === 8181) {
-      // Replace E2B and localhost URLs with our proxy URL
-      return url.replace(E2B_URL_PATTERN, PROXY_BASE).replace(LOCALHOST_URL_PATTERN, PROXY_BASE);
-    }
-    return url;
-  }
-
-  // === Monkeypatch fetch() ===
-  var originalFetch = window.fetch;
-  window.fetch = function(input, init) {
-    if (typeof input === "string") {
-      input = rewriteUrl(input);
-    } else if (input instanceof Request) {
-      var newUrl = rewriteUrl(input.url);
-      if (newUrl !== input.url) {
-        input = new Request(newUrl, input);
-      }
-    }
-    return originalFetch.call(this, input, init);
-  };
-
-  // === Monkeypatch XMLHttpRequest.open() ===
-  var originalXhrOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    arguments[1] = rewriteUrl(url);
-    return originalXhrOpen.apply(this, arguments);
-  };
-
-  // === Intercept form submissions ===
-  document.addEventListener("submit", function(event) {
-    var form = event.target;
-    if (form.tagName === "FORM" && form.action) {
-      form.action = rewriteUrl(form.action);
-    }
-  }, true); // Use capture phase to intercept before other handlers
-
-})();
-</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flodar — Lightweight Network Flow Collector</title>
@@ -522,6 +483,7 @@
       padding: 0.25rem 0.625rem;
       border-radius: 2px;
     }
+    .status-done { background: rgba(16,185,129,0.08); color: #6ee7b7; }
     .status-active { background: rgba(16,185,129,0.12); color: #10b981; }
     .status-planned { background: var(--gray-100); color: var(--gray-500); }
     .roadmap-table .desc { color: var(--text-secondary); font-size: 0.875rem; }
@@ -721,6 +683,8 @@
       <a href="#why">Why</a>
       <a href="#how">How it Works</a>
       <a href="#performance">Performance</a>
+      <a href="#observability">Observability</a>
+      <a href="#observability">Observability</a>
       <a href="#roadmap">Roadmap</a>
       <a href="https://github.com/RohitKochhar/flodar" class="nav-cta">GitHub →</a>
     </div>
@@ -730,9 +694,9 @@
 <!-- SECTION: hero -->
 <div class="hero" id="top">
   <div class="hero-inner">
-    <div class="hero-eyebrow">Open Source · Written in Rust</div>
+    <div class="hero-eyebrow">Open Source · Rust · Apache-2.0</div>
     <h1>Network flow<br><em>visibility.</em><br>No data center<br>required.</h1>
-    <p class="subtitle">Flodar is a lightweight flow collector and analysis engine. It ingests NetFlow, IPFIX, and sFlow telemetry, detects anomalies in real time, and connects to Prometheus and Grafana — as a single binary.</p>
+    <p class="subtitle">Flodar is a lightweight flow collector and analysis engine. It ingests NetFlow v5/v9 and IPFIX telemetry, detects anomalies in real time, and exposes metrics to Prometheus and Grafana — as a single binary.</p>
     <div class="hero-actions">
       <a href="https://github.com/RohitKochhar/flodar" class="btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -749,15 +713,15 @@
     </div>
     <div class="meta-item">
       <span class="meta-label">Protocols</span>
-      <span class="meta-value">NetFlow · IPFIX · sFlow</span>
+      <span class="meta-value">NetFlow v5/v9 · IPFIX</span>
     </div>
     <div class="meta-item">
-      <span class="meta-label">Deployment</span>
-      <span class="meta-value">Single binary</span>
+      <span class="meta-label">License</span>
+      <span class="meta-value">Apache-2.0</span>
     </div>
     <div class="meta-item">
       <span class="meta-label">Status</span>
-      <span class="meta-value highlight">v0.1 in progress</span>
+      <span class="meta-value highlight">v1.0-beta</span>
     </div>
   </div>
 </div>
@@ -836,7 +800,7 @@ router
         <span class="num">01</span>
         <div class="item-content">
           <strong>Ingestion</strong>
-          <span>Flodar binds a UDP socket and receives flow exports from any NetFlow v5/v9, IPFIX, or sFlow-capable device. No agent installation on your routers.</span>
+          <span>Flodar binds a UDP socket and receives flow exports from any NetFlow v5/v9 or IPFIX-capable device. No agent installation required.</span>
         </div>
       </li>
       <li>
@@ -940,52 +904,106 @@ Window: 10 seconds
   </div>
 </section>
 
+<!-- SECTION: observability -->
+<section class="content-section alt" id="observability">
+  <div class="section-inner">
+    <div class="section-label">05 — Observability</div>
+    <h2>Plug into the stack you already run.</h2>
+    <p class="lead">Flodar is built around open standards. No proprietary agents, no vendor lock-in.</p>
+    <div class="two-col" style="margin-top:3rem;">
+      <div>
+        <div class="col-label">Metrics</div>
+        <h3>Prometheus + Grafana</h3>
+        <p style="font-size:0.9375rem;">Flodar exposes a <code style="font-family:monospace;font-size:0.875em;background:var(--gray-100);padding:0.2rem 0.4rem;border-radius:3px;">/metrics</code> endpoint in Prometheus text format. Pre-built Grafana dashboard JSON ships in the repo — load it into any Grafana instance with no manual configuration.</p>
+      </div>
+      <div>
+        <div class="col-label">Logs</div>
+        <h3>Loki / any log shipper</h3>
+        <p style="font-size:0.9375rem;">Structured JSON on stdout by default. Optional <code style="font-family:monospace;font-size:0.875em;background:var(--gray-100);padding:0.2rem 0.4rem;border-radius:3px;">tracing-loki</code> adapter for direct push — enable with a single config flag. Works with Promtail, Vector, Fluentd, and Logstash without any code changes.</p>
+      </div>
+    </div>
+    <div class="specs-grid" style="margin-top:3rem;">
+      <div class="spec-item">
+        <div class="spec-label">Metrics endpoint</div>
+        <div class="spec-value"><code style="font-family:monospace;font-size:0.875em;">GET /metrics</code> — Prometheus text format</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-label">Log format</div>
+        <div class="spec-value">Structured JSON to stdout — all fields as key-value pairs</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-label">Grafana</div>
+        <div class="spec-value">Pre-provisioned dashboard JSON in <code style="font-family:monospace;font-size:0.875em;">grafana/</code></div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-label">Loki</div>
+        <div class="spec-value">Optional — <code style="font-family:monospace;font-size:0.875em;">[logging] backend = "loki"</code></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- SECTION: roadmap -->
 <section class="content-section dark" id="roadmap">
   <div class="section-inner">
-    <div class="section-label">05 — Roadmap</div>
-    <h2>Where we are. Where we're going.</h2>
-    <table class="roadmap-table" style="margin-top:2.5rem;">
-      <thead>
-        <tr>
-          <th>Version</th>
-          <th>Scope</th>
-          <th style="text-align:right;">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="color:white;">v0.1</td>
-          <td class="desc">UDP ingestion · FlowRecord model · structured flow logging</td>
-          <td style="text-align:right;"><span class="status-badge status-active">Active</span></td>
-        </tr>
-        <tr>
-          <td style="color:white;">v0.2</td>
-          <td class="desc">Analytics engine · sliding window metrics (10s / 1m / 5m)</td>
-          <td style="text-align:right;"><span class="status-badge status-planned">Planned</span></td>
-        </tr>
-        <tr>
-          <td style="color:white;">v0.3</td>
-          <td class="desc">DDoS detection — UDP flood, SYN flood, port scan, destination hotspot</td>
-          <td style="text-align:right;"><span class="status-badge status-planned">Planned</span></td>
-        </tr>
-        <tr>
-          <td style="color:white;">v0.4</td>
-          <td class="desc">Prometheus metrics endpoint</td>
-          <td style="text-align:right;"><span class="status-badge status-planned">Planned</span></td>
-        </tr>
-        <tr>
-          <td style="color:white;">v0.5</td>
-          <td class="desc">Grafana dashboards · Docker support</td>
-          <td style="text-align:right;"><span class="status-badge status-planned">Planned</span></td>
-        </tr>
-        <tr>
-          <td style="color:white;">v1.0</td>
-          <td class="desc">Full protocol support · stable detection engine · documentation</td>
-          <td style="text-align:right;"><span class="status-badge status-planned">Planned</span></td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="section-label">06 — Roadmap</div>
+    <h2>Actively built.<br>v1.0 on the horizon.</h2>
+    <p style="color:var(--text-inverse-secondary); font-size:1.125rem; line-height:1.8; max-width:640px; margin-bottom:3.5rem;">Flodar is under active development. The core pipeline — ingestion, analytics, detection, and Prometheus integration — is complete. Upcoming work focuses on broader protocol support, optional local storage, and a stable v1.0 release.</p>
+    <div class="two-col">
+      <div>
+        <div class="col-label" style="color:var(--text-inverse-tertiary); border-color:rgba(255,255,255,0.1);">What's built</div>
+        <ul class="numbered-list" style="margin-top:1.5rem;">
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>Flow ingestion</strong><span>NetFlow v5/v9, IPFIX over UDP</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>Sliding window analytics</strong><span>10s, 1m, 5m windows — flows, bytes, top talkers</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>DDoS detection</strong><span>UDP flood, SYN flood, port scan, destination hotspot</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>Prometheus + Grafana</strong><span>/metrics endpoint, pre-built dashboard, optional Loki adapter</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>Docker support</strong><span>Single image, no external dependencies</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08); border-bottom:none;">
+            <span class="num">✓</span>
+            <div class="item-content"><strong>Local storage + webhooks</strong><span>DuckDB flow history · SQLite alert history · webhook delivery to Slack, PagerDuty, or any endpoint</span></div>
+          </li>
+        </ul>
+      </div>
+      <div>
+        <div class="col-label" style="color:var(--text-inverse-tertiary); border-color:rgba(255,255,255,0.1);">What's coming</div>
+        <ul class="numbered-list" style="margin-top:1.5rem;">
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">→</span>
+            <div class="item-content"><strong>v1.0 stable release</strong><span>cargo install flodar · GitHub Actions CI/CD · full documentation</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">→</span>
+            <div class="item-content"><strong>Multi-router visibility</strong><span>Named exporters · per-router analytics · per-router Prometheus metrics</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08);">
+            <span class="num">→</span>
+            <div class="item-content"><strong>Service profiles + adaptive detection</strong><span>Per-IP traffic baselines · detection thresholds that adapt to your network, not a generic default</span></div>
+          </li>
+          <li style="border-color:rgba(255,255,255,0.08); border-bottom:none;">
+            <span class="num">→</span>
+            <div class="item-content"><strong>Flodar UI</strong><span>A purpose-built interface for live traffic and historical analysis — deployed as a separate optional service</span></div>
+          </li>
+        </ul>
+        <div style="margin-top:2.5rem; padding-top:2rem; border-top:1px solid rgba(255,255,255,0.08);">
+          <a href="https://github.com/RohitKochhar/flodar" style="font-size:0.8125rem; color:var(--text-inverse-secondary); text-decoration:none; letter-spacing:0.03em;">Follow progress on GitHub →</a>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -993,8 +1011,8 @@ Window: 10 seconds
 <section class="final">
   <div class="section-inner">
     <div class="section-label" style="color:var(--text-inverse-tertiary); margin-bottom:2rem;">Get Started</div>
-    <h2>Network visibility<br>in minutes.</h2>
-    <p>A single binary. No Kafka. No ClickHouse. Just your router pointing at Flodar and a Grafana dashboard showing you exactly what's happening on your network.</p>
+    <h2>Network security<br>for your homelab.</h2>
+    <p>Starts as a single binary with zero dependencies. Grows into a full platform — multi-router visibility, attack replay, service profiles, and adaptive detection. All on hardware you already own.</p>
     <div class="final-actions">
       <a href="https://github.com/RohitKochhar/flodar" class="btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -1006,7 +1024,7 @@ Window: 10 seconds
 </section>
 
 <footer>
-  Flodar — Open Source Network Flow Collector · Written in Rust · MIT License
+  Flodar — Open Source Network Flow Collector · Written in Rust · Apache License
 </footer>
 
 <a href="#top" class="scroll-indicator">
@@ -1026,39 +1044,10 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
-<script data-obvious-badge>
-(function() {
-  // Only show badge if NOT in iframe (external access only)
-  if (window.self === window.top) {
-    // Create badge as clickable link
-    var badge = document.createElement('a');
-    badge.href = 'https://obvious.ai/';
-    badge.target = '_blank';
-    badge.rel = 'noopener noreferrer';
-
-    // Apply fixed positioning styles inline (works even if app overrides CSS)
-    badge.style.cssText = 'position: fixed; bottom: 16px; right: 16px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; color: rgba(0, 0, 0, 0.72); text-decoration: none; opacity: 0.6; z-index: 9999; transition: opacity 0.2s; cursor: pointer;';
-
-    badge.innerHTML = '\x3csvg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 22 20\" width=\"16\" height=\"16\"\x3e\n  \x3cpath fill=\"currentColor\" fill-opacity=\".92\" fill-rule=\"evenodd\" d=\"M10.94.68c.04.02.08.02.12 0a5.08 5.08 0 0 1 5.15.04 5.38 5.38 0 0 1 2.6 4.57c0 .04.03.08.06.1A5.39 5.39 0 0 1 21.42 10a5.39 5.39 0 0 1-2.55 4.6.12.12 0 0 0-.06.1 5.38 5.38 0 0 1-2.6 4.58c-1.65.98-3.6.93-5.15.04a.12.12 0 0 0-.12 0c-1.55.89-3.5.94-5.15-.04a5.38 5.38 0 0 1-2.6-4.57.12.12 0 0 0-.06-.1A5.39 5.39 0 0 1 .58 10a5.39 5.39 0 0 1 2.55-4.6.12.12 0 0 0 .06-.1c.02-1.84.95-3.6 2.6-4.58a5.08 5.08 0 0 1 5.15-.04ZM8.4 14.85c0-.1-.1-.15-.18-.1a5.07 5.07 0 0 1-3.33.53.12.12 0 0 0-.14.13 3.83 3.83 0 0 0 1.79 2.55c.95.56 2.05.65 3.03.31.07-.02.1-.12.04-.18a5.4 5.4 0 0 1-1.21-3.24Zm5.38-.1c-.08-.05-.18 0-.18.1a5.45 5.45 0 0 1-1.21 3.24c-.06.06-.03.16.04.18.98.34 2.08.25 3.03-.31a3.81 3.81 0 0 0 1.79-2.55.12.12 0 0 0-.14-.13 5.1 5.1 0 0 1-3.33-.54Zm-2.7-2.76a.1.1 0 0 0-.16 0 3.91 3.91 0 0 0 0 5.3.1.1 0 0 0 .16 0 3.91 3.91 0 0 0 0-5.3Zm-1.71-.93a.11.11 0 0 0-.08-.14 3.68 3.68 0 0 0-4.47 2.66c-.02.06.02.12.08.14a3.74 3.74 0 0 0 4.47-2.65Zm7.46 1.67a3.68 3.68 0 0 0-4.12-1.8.11.11 0 0 0-.08.13 3.74 3.74 0 0 0 4.47 2.66c.06-.02.1-.08.08-.14a3.9 3.9 0 0 0-.35-.85Zm1.85-5.59a.11.11 0 0 0-.18.05 5.46 5.46 0 0 1-2.12 2.7.13.13 0 0 0 0 .22 5.27 5.27 0 0 1 2.12 2.7c.03.08.12.1.18.05A3.87 3.87 0 0 0 19.93 10c0-1.14-.48-2.16-1.25-2.86ZM3.5 7.19a.11.11 0 0 0-.18-.05A3.87 3.87 0 0 0 2.07 10c0 1.14.48 2.16 1.25 2.86.06.05.15.03.18-.05a5.47 5.47 0 0 1 2.12-2.7.13.13 0 0 0 0-.22A5.27 5.27 0 0 1 3.5 7.2Zm2.3-1.02c-.32 0-.61.04-.9.11a.11.11 0 0 0-.08.14A3.68 3.68 0 0 0 9.3 9.07c.06 0 .1-.07.08-.13A3.74 3.74 0 0 0 5.8 6.17Zm10.4 0a3.74 3.74 0 0 0-3.57 2.77c-.01.06.02.12.08.14a3.68 3.68 0 0 0 4.47-2.66.11.11 0 0 0-.08-.14 3.63 3.63 0 0 0-.9-.1Zm-5.12-3.46a.1.1 0 0 0-.16 0 3.91 3.91 0 0 0 0 5.3.1.1 0 0 0 .16 0 3.91 3.91 0 0 0 0-5.3ZM9.6 1.9c.06-.06.03-.16-.04-.18a3.62 3.62 0 0 0-3.03.31A3.81 3.81 0 0 0 4.75 4.6c-.01.08.06.15.14.13a5.1 5.1 0 0 1 3.33.54c.08.04.18-.02.18-.1A5.45 5.45 0 0 1 9.6 1.9Zm5.85.13a3.62 3.62 0 0 0-3.03-.31c-.07.02-.1.12-.04.18a5.4 5.4 0 0 1 1.21 3.24c0 .1.1.15.18.1a5.07 5.07 0 0 1 3.33-.53c.08.02.15-.05.14-.13a3.81 3.81 0 0 0-1.79-2.55Z\" clip-rule=\"evenodd\"/\x3e\n\x3c/svg\x3e <span>Created with Obvious</span>';
-
-    // Hover effect
-    badge.onmouseenter = function() { badge.style.opacity = '0.9'; };
-    badge.onmouseleave = function() { badge.style.opacity = '0.6'; };
-
-    // Inject on DOM ready
-    if (document.body) {
-      document.body.appendChild(badge);
-    } else {
-      document.addEventListener('DOMContentLoaded', function() {
-        document.body.appendChild(badge);
-      });
-    }
-  }
-})();
-</script><script data-obvious-analytics>
+<script data-obvious-analytics>
 (function(){
   // Config from server
-  var T="eyJyZXNvdXJjZVR5cGUiOiJob3N0ZWRfYXBwIiwicmVzb3VyY2VJZCI6InByal9OV3MwOVc5MiIsImlhdCI6MTc3Mjg1MjE5MTY2MH0._7iJbgjURXSJIQ2CfhCUba-dtFeUT5UdWDiIGpQsWaY",R="hosted_app",I="prj_NWs09W92",E="https://api.app.obvious.ai/prepare/a/e";
+  var T="eyJyZXNvdXJjZVR5cGUiOiJwdWJsaXNoZWRfYXJ0aWZhY3QiLCJyZXNvdXJjZUlkIjoiYXJ0X0t1cEwzZkZtIiwiaWF0IjoxNzczMjYxMTQ3MjgwfQ.LK8IEalS4FQvryZxDqgB2dGKFlBlgIZIS4PmmKyQGj8",R="published_artifact",I="art_KupL3fFm",E="https://api.app.obvious.ai/prepare/a/e";
 
   // For hosted apps: skip analytics when in an iframe (internal dashboard view)
   // Direct access (window.self === window.top) is tracked, iframe embeds are not
@@ -1189,6 +1178,32 @@ document.addEventListener('DOMContentLoaded', function() {
   window.__oa={
     track:function(name,data){sE("custom",name,data)}
   };
+})();
+</script><script data-obvious-badge>
+(function() {
+  // Create badge as clickable link
+  var badge = document.createElement('a');
+  badge.href = 'https://obvious.ai/';
+  badge.target = '_blank';
+  badge.rel = 'noopener noreferrer';
+
+  // Apply fixed positioning styles (bottom-left, matching dashboard styling)
+  badge.style.cssText = 'position: fixed; bottom: calc(2rem + 6px); left: 2rem; display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; font-size: 12px; font-weight: 500; color: rgba(0, 0, 0, 0.72); text-decoration: none; z-index: 9999; transition: opacity 0.2s; cursor: pointer;';
+
+  badge.innerHTML = '<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 22 20\" width=\"14\" height=\"14\">\n  <path fill=\"currentColor\" fill-opacity=\".92\" fill-rule=\"evenodd\" d=\"M10.94.68c.04.02.08.02.12 0a5.08 5.08 0 0 1 5.15.04 5.38 5.38 0 0 1 2.6 4.57c0 .04.03.08.06.1A5.39 5.39 0 0 1 21.42 10a5.39 5.39 0 0 1-2.55 4.6.12.12 0 0 0-.06.1 5.38 5.38 0 0 1-2.6 4.58c-1.65.98-3.6.93-5.15.04a.12.12 0 0 0-.12 0c-1.55.89-3.5.94-5.15-.04a5.38 5.38 0 0 1-2.6-4.57.12.12 0 0 0-.06-.1A5.39 5.39 0 0 1 .58 10a5.39 5.39 0 0 1 2.55-4.6.12.12 0 0 0 .06-.1c.02-1.84.95-3.6 2.6-4.58a5.08 5.08 0 0 1 5.15-.04ZM8.4 14.85c0-.1-.1-.15-.18-.1a5.07 5.07 0 0 1-3.33.53.12.12 0 0 0-.14.13 3.83 3.83 0 0 0 1.79 2.55c.95.56 2.05.65 3.03.31.07-.02.1-.12.04-.18a5.4 5.4 0 0 1-1.21-3.24Zm5.38-.1c-.08-.05-.18 0-.18.1a5.45 5.45 0 0 1-1.21 3.24c-.06.06-.03.16.04.18.98.34 2.08.25 3.03-.31a3.81 3.81 0 0 0 1.79-2.55.12.12 0 0 0-.14-.13 5.1 5.1 0 0 1-3.33-.54Zm-2.7-2.76a.1.1 0 0 0-.16 0 3.91 3.91 0 0 0 0 5.3.1.1 0 0 0 .16 0 3.91 3.91 0 0 0 0-5.3Zm-1.71-.93a.11.11 0 0 0-.08-.14 3.68 3.68 0 0 0-4.47 2.66c-.02.06.02.12.08.14a3.74 3.74 0 0 0 4.47-2.65Zm7.46 1.67a3.68 3.68 0 0 0-4.12-1.8.11.11 0 0 0-.08.13 3.74 3.74 0 0 0 4.47 2.66c.06-.02.1-.08.08-.14a3.9 3.9 0 0 0-.35-.85Zm1.85-5.59a.11.11 0 0 0-.18.05 5.46 5.46 0 0 1-2.12 2.7.13.13 0 0 0 0 .22 5.27 5.27 0 0 1 2.12 2.7c.03.08.12.1.18.05A3.87 3.87 0 0 0 19.93 10c0-1.14-.48-2.16-1.25-2.86ZM3.5 7.19a.11.11 0 0 0-.18-.05A3.87 3.87 0 0 0 2.07 10c0 1.14.48 2.16 1.25 2.86.06.05.15.03.18-.05a5.47 5.47 0 0 1 2.12-2.7.13.13 0 0 0 0-.22A5.27 5.27 0 0 1 3.5 7.2Zm2.3-1.02c-.32 0-.61.04-.9.11a.11.11 0 0 0-.08.14A3.68 3.68 0 0 0 9.3 9.07c.06 0 .1-.07.08-.13A3.74 3.74 0 0 0 5.8 6.17Zm10.4 0a3.74 3.74 0 0 0-3.57 2.77c-.01.06.02.12.08.14a3.68 3.68 0 0 0 4.47-2.66.11.11 0 0 0-.08-.14 3.63 3.63 0 0 0-.9-.1Zm-5.12-3.46a.1.1 0 0 0-.16 0 3.91 3.91 0 0 0 0 5.3.1.1 0 0 0 .16 0 3.91 3.91 0 0 0 0-5.3ZM9.6 1.9c.06-.06.03-.16-.04-.18a3.62 3.62 0 0 0-3.03.31A3.81 3.81 0 0 0 4.75 4.6c-.01.08.06.15.14.13a5.1 5.1 0 0 1 3.33.54c.08.04.18-.02.18-.1A5.45 5.45 0 0 1 9.6 1.9Zm5.85.13a3.62 3.62 0 0 0-3.03-.31c-.07.02-.1.12-.04.18a5.4 5.4 0 0 1 1.21 3.24c0 .1.1.15.18.1a5.07 5.07 0 0 1 3.33-.53c.08.02.15-.05.14-.13a3.81 3.81 0 0 0-1.79-2.55Z\" clip-rule=\"evenodd\"/>\n</svg> <span>Powered by Obvious</span>';
+
+  // Hover effect
+  badge.onmouseenter = function() { badge.style.opacity = '0.8'; };
+  badge.onmouseleave = function() { badge.style.opacity = '1'; };
+
+  // Inject on DOM ready
+  if (document.body) {
+    document.body.appendChild(badge);
+  } else {
+    document.addEventListener('DOMContentLoaded', function() {
+      document.body.appendChild(badge);
+    });
+  }
 })();
 </script></body>
 </html>
