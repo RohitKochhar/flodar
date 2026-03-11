@@ -94,7 +94,7 @@ alert_db_path = "flodar_alerts.db"      # SQLite file for triggered alerts
 # ---------------------------------------------------------------------------
 [webhook]
 enabled         = true
-url             = "https://webhook.site/9f27b725-a0bf-4a3c-a15d-4f07ec6161eb/flodar-alerts"
+url             = "https://your-endpoint.example.com/flodar-alerts"
 timeout_secs    = 5    # per-attempt HTTP timeout
 retry_attempts  = 1    # additional attempts after the first failure (0 = no retries)
 
